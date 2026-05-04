@@ -1,8 +1,8 @@
 # Computer Graphics 2026 - Course Portfolio
 
 **Student Information**
-* **Name:** [Your Name Here]
-* **Student ID:** [Your ID Here]
+* **Name:** Yosef Salem
+* **Student ID:** 213537459
 
 ## Academic Integrity & Workflow Agreement
 
