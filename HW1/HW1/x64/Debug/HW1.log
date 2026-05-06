@@ -1,0 +1,24 @@
+﻿  main.cpp
+  MiniFB_cpp.cpp
+  ui_renderer.cpp
+  Generating Code...
+  microui.c
+  MiniFB_common.c
+C:\courses\ComputerGraphics\cgatuoh26-cg-at-uoh-26-cgvibes-uoh-template\HW1\microui.c(331,35): warning C4267: 'function': conversion from 'size_t' to 'int', possible loss of data
+C:\courses\ComputerGraphics\cgatuoh26-cg-at-uoh-26-cgvibes-uoh-template\HW1\microui.c(415,13): warning C4267: 'initializing': conversion from 'size_t' to 'int', possible loss of data
+C:\courses\ComputerGraphics\cgatuoh26-cg-at-uoh-26-cgvibes-uoh-template\HW1\microui.c(416,27): warning C4267: 'initializing': conversion from 'size_t' to 'int', possible loss of data
+C:\courses\ComputerGraphics\cgatuoh26-cg-at-uoh-26-cgvibes-uoh-template\HW1\microui.c(494,24): warning C4267: '=': conversion from 'size_t' to 'int', possible loss of data
+C:\courses\ComputerGraphics\cgatuoh26-cg-at-uoh-26-cgvibes-uoh-template\HW1\microui.c(714,42): warning C4244: 'function': conversion from '__int64' to 'int', possible loss of data
+C:\courses\ComputerGraphics\cgatuoh26-cg-at-uoh-26-cgvibes-uoh-template\HW1\microui.c(719,40): warning C4244: 'function': conversion from '__int64' to 'int', possible loss of data
+C:\courses\ComputerGraphics\cgatuoh26-cg-at-uoh-26-cgvibes-uoh-template\HW1\microui.c(733,44): warning C4267: 'function': conversion from 'size_t' to 'int', possible loss of data
+C:\courses\ComputerGraphics\cgatuoh26-cg-at-uoh-26-cgvibes-uoh-template\HW1\microui.c(779,15): warning C4267: 'initializing': conversion from 'size_t' to 'int', possible loss of data
+C:\courses\ComputerGraphics\cgatuoh26-cg-at-uoh-26-cgvibes-uoh-template\HW1\microui.c(834,16): warning C4244: '=': conversion from 'double' to 'mu_Real', possible loss of data
+C:\courses\ComputerGraphics\cgatuoh26-cg-at-uoh-26-cgvibes-uoh-template\HW1\microui.c(882,32): warning C4244: '=': conversion from 'mu_Real' to 'int', possible loss of data
+C:\courses\ComputerGraphics\cgatuoh26-cg-at-uoh-26-cgvibes-uoh-template\HW1\microui.c(928,36): warning C4267: 'function': conversion from 'size_t' to 'int', possible loss of data
+C:\courses\ComputerGraphics\cgatuoh26-cg-at-uoh-26-cgvibes-uoh-template\HW1\microui.c(1084,36): warning C4267: 'function': conversion from 'size_t' to 'int', possible loss of data
+C:\courses\ComputerGraphics\cgatuoh26-cg-at-uoh-26-cgvibes-uoh-template\HW1\microui.c(1192,25): warning C4267: 'function': conversion from 'size_t' to 'int', possible loss of data
+  MiniFB_internal.c
+  MiniFB_timer.c
+  WinMiniFB.c
+  Generating Code...
+  HW1.vcxproj -> C:\courses\ComputerGraphics\cgatuoh26-cg-at-uoh-26-cgvibes-uoh-template\HW1\x64\Debug\HW1.exe
