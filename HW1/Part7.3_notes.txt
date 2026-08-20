@@ -1,0 +1,18 @@
+PART 7.3: Anti-Aliasing Overlap Behavior
+
+When drawing anti-aliased lines on top of other lines, the alpha blending
+causes the colors to mix in overlapping regions. This is because Xiaolin Wu's
+algorithm draws pixels with fractional brightness, and blend_pixel() combines
+the new color with the existing background color.
+
+OVERLAP BEHAVIOR:
+- Bresenham (Anti-Alias OFF): Overwrites pixels completely (no blending)
+- Xiaolin Wu (Anti-Alias ON): Blends with existing pixels (creates mixed colors)
+
+To minimize visual artifacts:
+- Lines are drawn in the order they were created (last line on top)
+- The UI is rendered BEFORE lines, so lines always appear on top of UI
+- The "Clear Lines" button removes all lines, resetting the canvas
+
+This is the standard behavior for anti-aliased rendering and is consistent
+with how modern graphics APIs handle alpha blending.
