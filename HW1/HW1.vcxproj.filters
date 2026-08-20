@@ -60,4 +60,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
+  <ItemGroup>
+    <Text Include="Part4_Explanation.txt" />
+    <Text Include="Benchmark_Results.txt" />
+    <Text Include="Part7.3_notes.txt" />
+  </ItemGroup>
 </Project>

@@ -2,7 +2,8 @@
 // microui.h included via ui_renderer.h
 #include <string.h>
 #include <algorithm>
-
+#include <cmath>
+extern int enable_distortion;
 // Minimal 8x8 bitmap font for ASCII characters 32-126
 // Each byte represents a row of 8 pixels
 static const uint8_t font_8x8[95][8] = {
@@ -122,29 +123,33 @@ void UIRenderer::render(mu_Context* ctx, uint32_t* buffer) {
 
 void UIRenderer::draw_rect(mu_Rect rect, mu_Color color) {
     uint32_t c = to_uint32(color);
-    int x1 = std::max({rect.x, m_clip_rect.x, 0});
-    int y1 = std::max({rect.y, m_clip_rect.y, 0});
-    int x2 = std::min({rect.x + rect.w, m_clip_rect.x + m_clip_rect.w, m_width});
-    int y2 = std::min({rect.y + rect.h, m_clip_rect.y + m_clip_rect.h, m_height});
+
+    //moves entire UI
+    int offset_x = enable_distortion ? 50 : 0;
+    int offset_y = enable_distortion ? 30 : 0;
+
+    int x1 = std::max({ rect.x + offset_x, m_clip_rect.x, 0 });
+    int y1 = std::max({ rect.y + offset_y, m_clip_rect.y, 0 });
+    int x2 = std::min({ rect.x + offset_x + rect.w, m_clip_rect.x + m_clip_rect.w, m_width });
+    int y2 = std::min({ rect.y + offset_y + rect.h, m_clip_rect.y + m_clip_rect.h, m_height });
 
     for (int y = y1; y < y2; y++) {
         for (int x = x1; x < x2; x++) {
-            float wave = sinf(x * 0.1f) * cosf(y * 0.1f);
-            int distorted_x = x+(int)wave;
-            int distorted_y = y-(int)wave;
-            if (distorted_x >= 0 && distorted_x < m_width &&
-                distorted_y >= 0 && distorted_y < m_height) {
-
-                m_buffer[distorted_y * m_width + distorted_x] = c;
-            }
-        }   
+            m_buffer[y * m_width + x] = c;
+        }
     }
 }
 
 void UIRenderer::draw_text(const char* text, mu_Vec2 pos, mu_Color color) {
     uint32_t c = to_uint32(color);
-    int x = pos.x;
-    int y = pos.y;
+
+    //Same translation on text
+    int offset_x = enable_distortion ? 50 : 0;
+    int offset_y = enable_distortion ? 30 : 0;
+
+    int x = pos.x + offset_x;
+    int y = pos.y + offset_y;
+
     for (const char* p = text; *p; p++) {
         if (*p < 32 || *p > 126) continue;
         const uint8_t* glyph = font_8x8[*p - 32];
@@ -185,7 +190,204 @@ void UIRenderer::draw_line(int x0, int y0, int x1, int y1, uint32_t c) {
         if (e2 <= dx) { err += dx; y0 += sy; }
     }
 }
+void UIRenderer::draw_circle(int xc, int yc, int radius, uint32_t color) {
+    if (radius <= 0) return;
 
+    int x = 0;
+    int y = radius;
+    int d = 3 - 2 * radius;  // Decision parameter
+
+    while (y >= x) {
+        // Draw eight symmetric pixels
+        draw_pixel(xc + x, yc + y, color);
+        draw_pixel(xc - x, yc + y, color);
+        draw_pixel(xc + x, yc - y, color);
+        draw_pixel(xc - x, yc - y, color);
+        draw_pixel(xc + y, yc + x, color);
+        draw_pixel(xc - y, yc + x, color);
+        draw_pixel(xc + y, yc - x, color);
+        draw_pixel(xc - y, yc - x, color);
+
+        x++;
+        if (d > 0) {
+            y--;
+            d = d + 4 * (x - y) + 10;
+        }
+        else {
+            d = d + 4 * x + 6;
+        }
+    }
+}
+void UIRenderer::draw_line_naive(int x0, int y0, int x1, int y1, uint32_t color) {
+    int dx = x1 - x0;
+    int dy = y1 - y0;
+
+    // Handle degenerate case (single point)
+    if (dx == 0 && dy == 0) {
+        draw_pixel(x0, y0, color);
+        return;
+    }
+
+    // Vertical line
+    if (dx == 0) {
+        int y_start = (y0 < y1) ? y0 : y1;
+        int y_end = (y0 < y1) ? y1 : y0;
+        for (int y = y_start; y <= y_end; y++) {
+            draw_pixel(x0, y, color);
+        }
+        return;
+    }
+
+    // Horizontal line
+    if (dy == 0) {
+        int x_start = (x0 < x1) ? x0 : x1;
+        int x_end = (x0 < x1) ? x1 : x0;
+        for (int x = x_start; x <= x_end; x++) {
+            draw_pixel(x, y0, color);
+        }
+        return;
+    }
+
+    float m = (float)dy / (float)dx;
+    float b = y0 - m * x0;
+
+    if (abs(dx) >= abs(dy)) {
+        // Shallow slope: iterate over x
+        int x_start = (x0 < x1) ? x0 : x1;
+        int x_end = (x0 < x1) ? x1 : x0;
+        for (int x = x_start; x <= x_end; x++) {
+            int y = (int)(m * x + b);
+            draw_pixel(x, y, color);
+        }
+    }
+    else {
+        // Steep slope: iterate over y
+        int y_start = (y0 < y1) ? y0 : y1;
+        int y_end = (y0 < y1) ? y1 : y0;
+        for (int y = y_start; y <= y_end; y++) {
+            int x = (int)((y - b) / m);
+            draw_pixel(x, y, color);
+        }
+    }
+}
+uint32_t UIRenderer::blend_pixel(uint32_t bg, uint32_t fg, float alpha) {
+    if (alpha <= 0.0f) return bg;
+    if (alpha >= 1.0f) return fg;
+
+    uint8_t br = (bg >> 16) & 0xFF;
+    uint8_t bg_ = (bg >> 8) & 0xFF;
+    uint8_t bb = bg & 0xFF;
+
+    uint8_t fr = (fg >> 16) & 0xFF;
+    uint8_t fg_ = (fg >> 8) & 0xFF;
+    uint8_t fb = fg & 0xFF;
+
+    uint8_t r = (uint8_t)(br * (1.0f - alpha) + fr * alpha);
+    uint8_t g = (uint8_t)(bg_ * (1.0f - alpha) + fg_ * alpha);
+    uint8_t b = (uint8_t)(bb * (1.0f - alpha) + fb * alpha);
+
+    return MFB_RGB(r, g, b);
+}
+void UIRenderer::draw_line_wu(int x0, int y0, int x1, int y1, uint32_t color) {
+    // Handle vertical line (no anti-aliasing needed)
+    if (x0 == x1) {
+        int y_start = (y0 < y1) ? y0 : y1;
+        int y_end = (y0 < y1) ? y1 : y0;
+        for (int y = y_start; y <= y_end; y++) {
+            draw_pixel(x0, y, color);
+        }
+        return;
+    }
+
+    // Handle horizontal line (no anti-aliasing needed)
+    if (y0 == y1) {
+        int x_start = (x0 < x1) ? x0 : x1;
+        int x_end = (x0 < x1) ? x1 : x0;
+        for (int x = x_start; x <= x_end; x++) {
+            draw_pixel(x, y0, color);
+        }
+        return;
+    }
+
+    bool steep = abs(y1 - y0) > abs(x1 - x0);
+
+    if (steep) {
+        std::swap(x0, y0);
+        std::swap(x1, y1);
+    }
+    if (x0 > x1) {
+        std::swap(x0, x1);
+        std::swap(y0, y1);
+    }
+
+    int dx = x1 - x0;
+    int dy = y1 - y0;
+    float gradient = (float)dy / (float)dx;
+
+    // First endpoint
+    float y = y0 + gradient;
+    float ipart;
+    float fpart = modff(y, &ipart);
+    int y_int = (int)y;
+
+    // Draw endpoint pixels (two pixels with brightness)
+    auto draw_pixel_alpha = [&](int x, int y, float alpha) {
+        if (x < 0 || x >= m_width || y < 0 || y >= m_height) return;
+        if (alpha <= 0.0f) return;
+
+        uint32_t bg = m_buffer[y * m_width + x];
+        // If background is black (0), blend with color directly
+        if (bg == 0) {
+            uint32_t blended = 0;
+            uint8_t r = (uint8_t)(((color >> 16) & 0xFF) * alpha);
+            uint8_t g = (uint8_t)(((color >> 8) & 0xFF) * alpha);
+            uint8_t b = (uint8_t)((color & 0xFF) * alpha);
+            m_buffer[y * m_width + x] = MFB_RGB(r, g, b);
+        }
+        else {
+            m_buffer[y * m_width + x] = blend_pixel(bg, color, alpha);
+        }
+        };
+
+    // Draw first endpoint
+    if (steep) {
+        draw_pixel_alpha(y_int, x0, 1.0f - fpart);
+        draw_pixel_alpha(y_int + 1, x0, fpart);
+    }
+    else {
+        draw_pixel_alpha(x0, y_int, 1.0f - fpart);
+        draw_pixel_alpha(x0, y_int + 1, fpart);
+    }
+
+    // Main loop
+    for (int x = x0 + 1; x < x1; x++) {
+        fpart = modff(y, &ipart);
+        y_int = (int)y;
+
+        if (steep) {
+            draw_pixel_alpha(y_int, x, 1.0f - fpart);
+            draw_pixel_alpha(y_int + 1, x, fpart);
+        }
+        else {
+            draw_pixel_alpha(x, y_int, 1.0f - fpart);
+            draw_pixel_alpha(x, y_int + 1, fpart);
+        }
+        y += gradient;
+    }
+
+    // Last endpoint
+    fpart = modff(y, &ipart);
+    y_int = (int)y;
+
+    if (steep) {
+        draw_pixel_alpha(y_int, x1, 1.0f - fpart);
+        draw_pixel_alpha(y_int + 1, x1, fpart);
+    }
+    else {
+        draw_pixel_alpha(x1, y_int, 1.0f - fpart);
+        draw_pixel_alpha(x1, y_int + 1, fpart);
+    }
+}
 void UIRenderer::draw_icon(int id, mu_Rect rect, mu_Color color) {
     uint32_t c = to_uint32(color);
     // Centre a square drawing area within the rect (max 14x14)

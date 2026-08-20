@@ -148,6 +148,11 @@
     <ClInclude Include="ui_bridge.h" />
     <ClInclude Include="ui_renderer.h" />
   </ItemGroup>
+  <ItemGroup>
+    <Text Include="Benchmark_Results.txt" />
+    <Text Include="Part4_Explanation.txt" />
+    <Text Include="Part7.3_notes.txt" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

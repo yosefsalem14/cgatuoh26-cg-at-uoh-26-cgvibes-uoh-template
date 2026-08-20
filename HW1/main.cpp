@@ -4,12 +4,15 @@
 #include <stdlib.h>
 #include <vector>
 #include <string.h>
+#include <cmath>
 extern "C" {
 #include "microui.h"
 }
 #include "ui_bridge.h"
 #include "ui_renderer.h"
-
+#include <chrono>
+#include <cstdlib>
+#include <ctime>
 #define WIDTH 1600
 #define HEIGHT 1200
 
@@ -24,8 +27,15 @@ struct Line {
     int x0, y0, x1, y1;
     uint32_t color;
 };
-
+struct Circle {
+    int xc, yc, radius;
+    uint32_t color;
+};
+int enable_distortion = 1;  // 1 = shifted, 0 = normal
+static int circle_mode = 0;  // 0 = line mode, 1 = circle mode
+static int anti_alias = 0;  // 0 = Bresenham, 1 = Xiaolin Wu
 std::vector<Line> lines;
+std::vector<Circle> circles;
 int main() {
     struct mfb_window* window =
         mfb_open_ex("MiniGUI Platform", WIDTH, HEIGHT, MFB_WF_RESIZABLE);
@@ -74,24 +84,27 @@ int main() {
         bool ui_blocking = (ctx->hover_root != nullptr);
 
         if (!ui_blocking) {
-            static bool prev_down = false;
-
-            bool down = mfb_get_mouse_button_buffer(window)[MFB_MOUSE_LEFT];
-
-            if (down && !prev_down) {
+            if (ctx->mouse_pressed == MU_MOUSE_LEFT) {
                 drawing = true;
                 start_x = mx;
                 start_y = my;
             }
-
-            if (!down && prev_down && drawing) {
-                drawing = false;
-                lines.push_back({ start_x, start_y, mx, my, current_color });
-            }
-
-            prev_down = down;
         }
 
+        if (drawing && !(ctx->mouse_down & MU_MOUSE_LEFT)) {
+            drawing = false;
+            if (circle_mode) {
+                // Calculate radius from start to current mouse position
+                int dx = mx - start_x;
+                int dy = my - start_y;
+                int radius = (int)sqrtf(dx * dx + dy * dy);
+                circles.push_back({ start_x, start_y, radius, current_color });
+            }
+            else {
+                lines.push_back({ start_x, start_y, mx, my, current_color });
+            }
+        }
+    
         // Update wave animation
         static float t = 0.0f;
         t += 0.016f * speed;
@@ -106,8 +119,8 @@ int main() {
 
                 if (mode == 0) {
 					// RGB waves
-                    float fx = x * 0.005f;
-                    float fy = y * 0.005f;
+                    float fx = x * 0.005f* wave_strength;
+                    float fy = y * 0.005f* wave_strength;
 
                     r = sinf(fx + t0) * 0.5f + 0.5f;
                     g = sinf(fy + t0 * 1.3f) * 0.5f + 0.5f;
@@ -121,7 +134,7 @@ int main() {
 
                     float dist = sqrtf(dx * dx + dy * dy);
 
-                    float wave = sinf(dist * 0.02f - t0 * 3.0f);
+                    float wave = sinf(dist * 0.02f * wave_strength - t0 * 3.0f);
 
                     r = wave * 0.5f + 0.5f;
                     g = sinf(wave * 3.0f + t0) * 0.5f + 0.5f;
@@ -130,8 +143,8 @@ int main() {
 
                 else if (mode == 2) {
 					// square waves
-                    float v1 = sinf((x + t0 * 60) * 0.02f);
-                    float v2 = sinf((y - t0 * 40) * 0.02f);
+                    float v1 = sinf((x + t0 * 60) * 0.02f * wave_strength);
+                    float v2 = sinf((y - t0 * 40) * 0.02f * wave_strength);
 
                     r = v1 * 0.5f + 0.5f;
                     g = v2 * 0.5f + 0.5f;
@@ -163,14 +176,7 @@ int main() {
                 g_buffer[y * WIDTH + x] = MFB_RGB(R, G, B);
             }
         }
-        // draw stored lines 
-        for (const auto& l : lines) {
-            renderer.draw_line(l.x0, l.y0, l.x1, l.y1, l.color);
-        }
-        // preview line while drawing
-        if (drawing) {
-            renderer.draw_line(start_x, start_y, mx, my, current_color);
-        }
+       
         // 3. UI Logic
         static float slider_val = 50.0f;
         static float number_val = 3.14f;
@@ -178,7 +184,7 @@ int main() {
         static int checkbox_b = 1;
         static char textbox_buf[128] = "edit me";
         static bool quit_requested = false;
-
+       
         mu_begin(ctx);
 
         // --- Widgets window ---
@@ -189,6 +195,12 @@ int main() {
             mu_layout_row(ctx, 1, w1, 0);
             mu_label(ctx, "mu_label: plain static text");
             mu_text(ctx, "press 0 ,1 or 2 to change mode , press + to increase intensity , - to decrease it press r to restart the intensity");
+			//UI shift checkbox
+            mu_checkbox(ctx, "UI Shift (click here)", &enable_distortion);
+			//explaing the circle mode checkbox
+            mu_label(ctx, "Circle: Click-drag to set center & radius");
+			//circle mode checkbox
+            mu_checkbox(ctx, "Circle Mode", &circle_mode);
             //UI controls for mouse drawing
             static float r_val = 255, g_val = 255, b_val = 255;
 
@@ -205,6 +217,7 @@ int main() {
             // clear lines button
             if (mu_button(ctx, "Clear Lines")) {
                 lines.clear();
+                circles.clear();
             }
             // button
             mu_layout_row(ctx, 1, w1, 0);
@@ -243,7 +256,50 @@ int main() {
             mu_slider(ctx, &speed, 0.1f, 10);
             // invert colors checkbox
             mu_checkbox(ctx, "invert colors", &invert_colors);
+            // Benchmark button
+            if (mu_button(ctx, "Benchmark Lines")) {
+                // Seed random number generator
+                srand((unsigned int)time(NULL));
 
+                const int NUM_LINES = 100000;
+                std::vector<Line> random_lines;
+                random_lines.reserve(NUM_LINES);
+
+                // Generate 100,000 random lines
+                for (int i = 0; i < NUM_LINES; i++) {
+                    int x0 = rand() % WIDTH;
+                    int y0 = rand() % HEIGHT;
+                    int x1 = rand() % WIDTH;
+                    int y1 = rand() % HEIGHT;
+                    random_lines.push_back({ x0, y0, x1, y1, MFB_RGB(255, 255, 255) });
+                }
+
+                printf("\n=== Benchmark: %d Lines ===\n", NUM_LINES);
+
+                // --- Benchmark Bresenham ---
+                auto start = std::chrono::high_resolution_clock::now();
+                for (const auto& l : random_lines) {
+                    renderer.draw_line(l.x0, l.y0, l.x1, l.y1, l.color);
+                }
+                auto end = std::chrono::high_resolution_clock::now();
+                auto bresenham_time = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+                printf("Bresenham (integer): %lld ms\n", bresenham_time);
+
+                // --- Benchmark Naive ---
+                start = std::chrono::high_resolution_clock::now();
+                for (const auto& l : random_lines) {
+                    renderer.draw_line_naive(l.x0, l.y0, l.x1, l.y1, l.color);
+                }
+                end = std::chrono::high_resolution_clock::now();
+                auto naive_time = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+                printf("Naive (floating):   %lld ms\n", naive_time);
+
+                // Calculate percentage difference
+                float speedup = (float)naive_time / (float)bresenham_time;
+                printf("Speedup: %.2fx faster\n\n", speedup);
+            }
+            //anti-alias checkbox
+            mu_checkbox(ctx, "Anti-alias (smooth lines)", &anti_alias);
             // number
             mu_layout_row(ctx, 1, w1, 0);
             mu_label(ctx, "mu_number (step 0.1):");
@@ -327,6 +383,36 @@ int main() {
 
         // 4. UI Rendering
         renderer.render(ctx, g_buffer);
+
+        // draw stored lines 
+        for (const auto& l : lines) {
+            if (anti_alias) {
+                renderer.draw_line_wu(l.x0, l.y0, l.x1, l.y1, l.color);
+            }
+            else {
+                renderer.draw_line(l.x0, l.y0, l.x1, l.y1, l.color);
+            }
+        }
+        // preview line while drawing
+        if (drawing && !circle_mode) {
+            if (anti_alias) {
+                renderer.draw_line_wu(start_x, start_y, mx, my, current_color);
+            }
+            else {
+                renderer.draw_line(start_x, start_y, mx, my, current_color);
+            }
+        }
+        // preview circle while drawing
+        if (drawing && circle_mode) {
+            int dx = mx - start_x;
+            int dy = my - start_y;
+            int radius = (int)sqrtf(dx * dx + dy * dy);
+            renderer.draw_circle(start_x, start_y, radius, current_color);
+        }
+        // draw stored circles
+        for (const auto& c : circles) {
+            renderer.draw_circle(c.xc, c.yc, c.radius, c.color);
+        }
 
         // 5. Display
         mfb_update_state state = mfb_update_ex(window, g_buffer, WIDTH, HEIGHT);
