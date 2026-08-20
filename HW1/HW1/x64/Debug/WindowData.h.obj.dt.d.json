@@ -1,0 +1,21 @@
+{
+    "Version": "1.2",
+    "Data": {
+        "Source": "c:\\courses\\computergraphics\\cgatuoh26-cg-at-uoh-26-cgvibes-uoh-template\\hw1\\minifb-master\\src\\windowdata.h",
+        "ProvidedModule": "",
+        "Includes": [
+            "c:\\program files\\microsoft visual studio\\18\\community\\vc\\tools\\msvc\\14.51.36231\\include\\stdint.h",
+            "c:\\program files\\microsoft visual studio\\18\\community\\vc\\tools\\msvc\\14.51.36231\\include\\vcruntime.h",
+            "c:\\program files\\microsoft visual studio\\18\\community\\vc\\tools\\msvc\\14.51.36231\\include\\sal.h",
+            "c:\\program files\\microsoft visual studio\\18\\community\\vc\\tools\\msvc\\14.51.36231\\include\\concurrencysal.h",
+            "c:\\program files\\microsoft visual studio\\18\\community\\vc\\tools\\msvc\\14.51.36231\\include\\vadefs.h",
+            "c:\\program files\\microsoft visual studio\\18\\community\\vc\\tools\\msvc\\14.51.36231\\include\\stdbool.h",
+            "c:\\courses\\computergraphics\\cgatuoh26-cg-at-uoh-26-cgvibes-uoh-template\\hw1\\minifb-master\\include\\minifb_types.h",
+            "c:\\courses\\computergraphics\\cgatuoh26-cg-at-uoh-26-cgvibes-uoh-template\\hw1\\minifb-master\\include\\minifb_enums.h",
+            "c:\\courses\\computergraphics\\cgatuoh26-cg-at-uoh-26-cgvibes-uoh-template\\hw1\\minifb-master\\include\\minifb_keylist.h",
+            "c:\\courses\\computergraphics\\cgatuoh26-cg-at-uoh-26-cgvibes-uoh-template\\hw1\\minifb-master\\include\\minifb_macros.h"
+        ],
+        "ImportedModules": [],
+        "ImportedHeaderUnits": []
+    }
+}

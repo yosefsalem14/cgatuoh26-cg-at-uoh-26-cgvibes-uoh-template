@@ -1,0 +1,14 @@
+{
+    "version": 1,
+    "revision": 0,
+    "rules": [
+        {
+            "primary-output": "HW1\\x64\\Debug\\MiniFB_internal.obj",
+            "outputs": [
+                "HW1\\x64\\Debug\\MiniFB_internal.h.obj.dt.module.json",
+                "HW1\\x64\\Debug\\MiniFB_internal.h.obj.dt.d.json"
+            ],
+            "requires": []
+        }
+    ]
+}

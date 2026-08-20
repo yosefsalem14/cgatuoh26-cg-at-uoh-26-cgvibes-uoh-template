@@ -1,0 +1,14 @@
+{
+    "version": 1,
+    "revision": 0,
+    "rules": [
+        {
+            "primary-output": "HW1\\x64\\Debug\\WindowData.obj",
+            "outputs": [
+                "HW1\\x64\\Debug\\WindowData.h.obj.dt.module.json",
+                "HW1\\x64\\Debug\\WindowData.h.obj.dt.d.json"
+            ],
+            "requires": []
+        }
+    ]
+}
