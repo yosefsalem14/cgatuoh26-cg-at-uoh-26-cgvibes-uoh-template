@@ -1,0 +1,1442 @@
+#include "MiniFB.h"
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <vector>
+#include <string.h>
+#include <cmath>
+extern "C" {
+#include "microui.h"
+}
+#include "ui_bridge.h"
+#include "ui_renderer.h"
+#include <chrono>
+#include <cstdlib>
+#include <ctime>
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
+#include <algorithm>   
+#include <cfloat>
+#include <chrono>
+#define WIDTH 1600
+#define HEIGHT 1200
+
+extern glm::vec3 computeBarycentric(float x, float y, const glm::vec2& v0, const glm::vec2& v1, const glm::vec2& v2);
+static uint32_t current_color = MFB_RGB(255, 255, 255);
+static uint32_t g_buffer[WIDTH * HEIGHT];
+static float z_buffer[WIDTH * HEIGHT];   // Z-buffer for depth testing 
+static int mode = 0;
+static float intensity = 1.0f;
+static float wave_strength = 1.0f;
+static float speed = 1.0f;
+static int invert_colors = 0;
+static int show_axes = 1;          // 1 = show axes, 0 = hide
+static int show_bounding_box = 1;  // 1 = show bounding box, 0 = hide
+static int show_normals = 0;    // 0 = hide, 1 = show
+static int lookat_mode = 0;          // 0 = manual, 1 = lookat
+static float dollyZoom = 0.0f;    // 0 = normal, 1 = max effect
+static int show_triangle_fill = 0;    // 0 = off, 1 = on 
+static int show_z_buffer = 0;    // 0 = off, 1 = show Z-buffer visualization
+static int show_backface_culling = 0;    // 0 = off, 1 = on 
+static glm::vec3 lookatTarget = glm::vec3(0.0f, 0.0f, 0.0f);
+static int frameCount = 0;
+static float fpsTimer = 0.0f;
+static float currentFPS = 0.0f;
+static int use_fill_rules = 0;    // 0 = off, 1 = on 
+static uint32_t* g_textureData = nullptr;
+static int g_texWidth = 0;
+static int g_texHeight = 0;
+static int use_texture = 0;  // checkbox
+static std::chrono::high_resolution_clock::time_point lastTime;
+struct Line {
+    int x0, y0, x1, y1;
+    uint32_t color;
+};
+struct Circle {
+    int xc, yc, radius;
+    uint32_t color;
+};
+
+// 3D Model Container
+struct Model3D {
+    std::string name;
+    std::vector<Vertex3D> vertices;
+    std::vector<Face3D> faces;
+    bool loaded = false;
+
+    glm::vec3 localTranslation = glm::vec3(0.0f);
+    glm::vec3 localRotation = glm::vec3(0.0f);
+    glm::vec3 localScale = glm::vec3(1.0f);
+    glm::vec3 worldTranslation = glm::vec3(0.0f);
+    glm::vec3 worldRotation = glm::vec3(0.0f);
+    glm::vec3 worldScale = glm::vec3(1.0f);
+    glm::vec3 boundingBoxMin = glm::vec3(0.0f);
+    glm::vec3 boundingBoxMax = glm::vec3(0.0f);
+    std::vector<glm::vec3> faceNormals;
+    std::vector<glm::vec3> vertexNormals;
+    std::vector<uint32_t> faceColors;   // Random color per face 
+};
+// Camera struct for 
+struct Camera {
+    glm::vec3 position = glm::vec3(0.0f, 0.0f, 300.0f);
+    glm::vec3 rotation = glm::vec3(0.0f, 0.0f, 0.0f);
+};
+// Part 1 
+struct PointLight {
+    glm::vec3 position;
+    glm::vec3 ambient;
+    glm::vec3 diffuse;
+    glm::vec3 specular;
+};
+
+struct Material {
+    glm::vec3 ambient;
+    glm::vec3 diffuse;
+    glm::vec3 specular;
+    float shininess;
+};
+static PointLight g_light = {
+    glm::vec3(100.0f, 100.0f, 200.0f),
+    glm::vec3(1.0f, 1.0f, 1.0f),   // full ambient
+    glm::vec3(0.8f, 0.8f, 0.8f),
+    glm::vec3(1.0f, 1.0f, 1.0f)
+};
+
+static Material g_material = {
+    glm::vec3(1.0f, 1.0f, 1.0f),   // full ambient
+    glm::vec3(0.8f, 0.0f, 0.0f),
+    glm::vec3(1.0f, 1.0f, 1.0f),
+    32.0f
+};
+struct DebugLine {
+    int x0, y0, x1, y1;
+    uint32_t color;
+};
+std::vector<DebugLine> debugLines;
+Camera camera;
+int enable_distortion = 0;              // 1 = shifted, 0 = normal
+static int circle_mode = 0;             // 0 = line mode, 1 = circle mode
+static int anti_alias = 0;              // 0 = Bresenham, 1 = Xiaolin Wu
+static int show_2d_drawings = 0;        // 1 = show lines/circles, 0 = hide
+static int projection_mode = 0;     // 0 = Orthographic, 1 = Perspective
+static float fov = 60.0f;           // Field of View in degrees
+static float nearPlane = 0.1f;      // Near clipping plane
+static float farPlane = 1000.0f;    // Far clipping plane
+static int show_bbox_raster = 0;    // 0 = off, 1 = on 
+std::vector<Line> lines;                // 2D drawing storage
+std::vector<Circle> circles;            // 2D drawing storage
+std::vector<Model3D> models;            // 3D Variables
+int activeModelIndex = -1;              // -1 means no model loaded
+static int show_debug_vectors = 0;   // 0 = off, 1 = on
+static int shading_mode = 0;   // 0=Flat, 1=Gouraud, 2=Phong
+bool loadBMP(const char* filename, uint32_t*& outData, int& outWidth, int& outHeight);
+uint32_t randomColor() {
+    return MFB_RGB(rand() % 200 + 55, rand() % 200 + 55, rand() % 200 + 55);
+}
+int main() {
+    struct mfb_window* window =
+        mfb_open_ex("MiniGUI Platform", WIDTH, HEIGHT, MFB_WF_RESIZABLE);
+    if (!window)
+        return 1;
+
+    mu_Context* ctx = (mu_Context*)malloc(sizeof(mu_Context));
+    mu_init(ctx);
+
+    ctx->text_width = [](mu_Font font, const char* str, int len) {
+        return (len < 0 ? (int)strlen(str) : len) * 8;
+        };
+    ctx->text_height = [](mu_Font font) { return 8; };
+
+    UIRenderer renderer(WIDTH, HEIGHT);
+
+    // Test GLM
+    glm::vec3 testVec(1.0f, 2.0f, 3.0f);
+    glm::mat4 testMat = glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 20.0f, 30.0f));
+    glm::vec4 result = testMat * glm::vec4(testVec, 1.0f);
+    printf("GLM Test: (%.1f, %.1f, %.1f, %.1f)\n", result.x, result.y, result.z, result.w);
+
+    auto loadModel = [&](const std::string& filename, const std::string& name) {
+        Model3D model;
+        model.name = name;
+        if (renderer.loadOBJ(filename, model.vertices, model.faces)) {
+            glm::vec3 min(FLT_MAX), max(-FLT_MAX);
+            for (const auto& v : model.vertices) {
+                min.x = std::min(min.x, v.position.x);
+                min.y = std::min(min.y, v.position.y);
+                min.z = std::min(min.z, v.position.z);
+                max.x = std::max(max.x, v.position.x);
+                max.y = std::max(max.y, v.position.y);
+                max.z = std::max(max.z, v.position.z);
+            }
+
+            glm::vec3 center = (min + max) * 0.5f;
+            float size = std::max({ max.x - min.x, max.y - min.y, max.z - min.z });
+            float scale = 400.0f / size;
+            glm::mat4 normalizeMat = glm::translate(glm::mat4(1.0f), -center);
+            normalizeMat = glm::scale(normalizeMat, glm::vec3(scale));
+            for (auto& v : model.vertices) {
+                glm::vec4 pos = normalizeMat * glm::vec4(v.position, 1.0f);
+                v.position = glm::vec3(pos);
+            }
+            // Calculate bounding box for the model
+            model.boundingBoxMin = glm::vec3(FLT_MAX);
+            model.boundingBoxMax = glm::vec3(-FLT_MAX);
+            for (const auto& v : model.vertices) {
+                model.boundingBoxMin.x = std::min(model.boundingBoxMin.x, v.position.x);
+                model.boundingBoxMin.y = std::min(model.boundingBoxMin.y, v.position.y);
+                model.boundingBoxMin.z = std::min(model.boundingBoxMin.z, v.position.z);
+                model.boundingBoxMax.x = std::max(model.boundingBoxMax.x, v.position.x);
+                model.boundingBoxMax.y = std::max(model.boundingBoxMax.y, v.position.y);
+                model.boundingBoxMax.z = std::max(model.boundingBoxMax.z, v.position.z);
+            }
+            model.loaded = true;
+            // --- Calculate Normals ---
+            // Clear existing normals
+            model.faceNormals.clear();
+            model.vertexNormals.clear();
+            // Debug: print UVs of first vertex
+            if (model.vertices.size() > 0) {
+                printf("Model '%s' first UV: (%f, %f)\n",
+                    model.name.c_str(),
+                    model.vertices[0].uv.x,
+                    model.vertices[0].uv.y);
+            }
+            // 1. Calculate face normals (cross product of two edges)
+            for (const auto& face : model.faces) {
+                glm::vec3 v0 = model.vertices[face.v0].position;
+                glm::vec3 v1 = model.vertices[face.v1].position;
+                glm::vec3 v2 = model.vertices[face.v2].position;
+
+                glm::vec3 edge1 = v1 - v0;
+                glm::vec3 edge2 = v2 - v0;
+                glm::vec3 normal = glm::normalize(glm::cross(edge1, edge2));
+
+                // Handle degenerate triangles (zero-length normal)
+                if (glm::length(normal) < 0.0001f) {
+                    normal = glm::vec3(0.0f, 1.0f, 0.0f);
+                }
+
+                model.faceNormals.push_back(normal);
+            }
+
+            // 2. Calculate vertex normals (average of face normals)
+            model.vertexNormals.resize(model.vertices.size(), glm::vec3(0.0f));
+
+            for (int i = 0; i < (int)model.faces.size(); i++) {
+                const auto& face = model.faces[i];
+                glm::vec3 normal = model.faceNormals[i];
+
+                // Add face normal to each vertex of the face
+                model.vertexNormals[face.v0] += normal;
+                model.vertexNormals[face.v1] += normal;
+                model.vertexNormals[face.v2] += normal;
+            }
+
+            // Normalize vertex normals
+            for (auto& vn : model.vertexNormals) {
+                if (glm::length(vn) > 0.0001f) {
+                    vn = glm::normalize(vn);
+                }
+                else {
+                    vn = glm::vec3(0.0f, 1.0f, 0.0f);  // Default up vector
+                }
+            }
+            // --- Generate face colors (constant white for BBox) ---
+            model.faceColors.clear();
+            for (int i = 0; i < (int)model.faces.size(); i++) {
+                model.faceColors.push_back(randomColor());
+            }
+            printf("Computed %zu face normals, %zu vertex normals\n",
+                model.faceNormals.size(), model.vertexNormals.size());
+            models.push_back(model);
+            if (activeModelIndex == -1) activeModelIndex = 0;
+            printf("Loaded '%s': %zu vertices, %zu faces\n", name.c_str(), model.vertices.size(), model.faces.size());
+        }
+        else {
+            printf("Failed to load '%s'\n", filename.c_str());
+        }
+        };
+
+    // Load models
+    loadModel("cube.obj", "Cube");
+    loadModel("cube2.obj", "Cube2");
+    loadModel("diamond.obj", "Diamond");
+    loadModel("pyramid.obj", "Pyramid");
+    if (loadBMP("texture.bmp", g_textureData, g_texWidth, g_texHeight)) {
+        printf("Loaded texture: %dx%d\n", g_texWidth, g_texHeight);
+    }
+    else {
+        printf("Failed to load texture\n");
+    }
+
+    static bool mouseDragging = false;
+    static int prevMouseX = 0;
+    static int prevMouseY = 0;
+    static bool rightDragging = false;
+    static int prevRightX = 0;
+    static int prevRightY = 0;
+    static bool middleDragging = false;
+    static int prevMiddleY = 0;
+    // --- Keyboard Controls for 3D Transformations ---
+    mfb_set_char_input_callback(
+        [](struct mfb_window* w, unsigned int c) {
+            ui_bridge_char_input(w, c);
+            if (c == '1') mode = 0;
+            if (c == '2') mode = 1;
+            if (c == '3') mode = 2;
+            if (c == 'r') intensity = 1.0f;
+            if (c == '+') intensity += 0.1f;
+            if (c == '-') intensity -= 0.1f;
+            if (intensity < 0.1f) intensity = 0.1f;
+            if (intensity > 2.0f) intensity = 2.0f;
+
+            if (activeModelIndex >= 0) {
+                Model3D& model = models[activeModelIndex];
+                if (c == 's' || c == 'S') model.localTranslation.y -= 5.0f;
+                if (c == 'w' || c == 'W') model.localTranslation.y += 5.0f;
+                if (c == 'a' || c == 'A') model.localTranslation.x -= 5.0f;
+                if (c == 'd' || c == 'D') model.localTranslation.x += 5.0f;
+                if (c == 'q' || c == 'Q') model.localTranslation.z += 5.0f;
+                if (c == 'e' || c == 'E') model.localTranslation.z -= 5.0f;
+                if (c == 'z' || c == 'Z') model.localRotation.x += 5.0f;
+                if (c == 'x' || c == 'X') model.localRotation.x -= 5.0f;
+                if (c == 'c' || c == 'C') model.localRotation.y += 5.0f;
+                if (c == 'v' || c == 'V') model.localRotation.y -= 5.0f;
+                if (c == 'b' || c == 'B') model.localRotation.z += 5.0f;
+                if (c == 'n' || c == 'N') model.localRotation.z -= 5.0f;
+                if (c == 'r' || c == 'R') {
+                    model.localTranslation = glm::vec3(0.0f);
+                    model.localRotation = glm::vec3(0.0f);
+                    model.localScale = glm::vec3(1.0f);
+                    model.worldTranslation = glm::vec3(0.0f);
+                    model.worldRotation = glm::vec3(0.0f);
+                    model.worldScale = glm::vec3(1.0f);
+                    printf("Reset: %s\n", model.name.c_str());
+                }
+            }
+        },
+        window);
+
+    while (mfb_update_events(window) != MFB_STATE_EXIT) {
+        static bool drawing = false;
+        static int start_x = 0, start_y = 0;
+
+        // 1. Input
+        ui_bridge_input(ctx, window);
+        // --- Reset Z-Buffer (3) ---
+        for (int i = 0; i < WIDTH * HEIGHT; i++) {
+            z_buffer[i] = farPlane;
+        }
+        int mx = ctx->mouse_pos.x;
+        int my = ctx->mouse_pos.y;
+        bool ui_blocking = (ctx->hover_root != nullptr);
+        // --- Middle Mouse Drag for Scaling ---
+        if (!ui_blocking) {
+            if (activeModelIndex >= 0 && models[activeModelIndex].loaded) {
+                Model3D& model = models[activeModelIndex];
+
+                if (ctx->mouse_down & MU_MOUSE_MIDDLE) {
+                    if (!middleDragging) {
+                        middleDragging = true;
+                        prevMiddleY = my;
+                    }
+                    else {
+                        int dy = my - prevMiddleY;
+                        // Scale based on vertical mouse movement
+                        float scaleFactor = 1.0f + dy * 0.005f;
+                        model.localScale *= scaleFactor;
+                        // Clamp
+                        if (model.localScale.x < 0.1f) model.localScale.x = 0.1f;
+                        if (model.localScale.y < 0.1f) model.localScale.y = 0.1f;
+                        if (model.localScale.z < 0.1f) model.localScale.z = 0.1f;
+                        if (model.localScale.x > 10.0f) model.localScale.x = 10.0f;
+                        if (model.localScale.y > 10.0f) model.localScale.y = 10.0f;
+                        if (model.localScale.z > 10.0f) model.localScale.z = 10.0f;
+                        prevMiddleY = my;
+                    }
+                }
+                else {
+                    middleDragging = false;
+                }
+            }
+        }
+        // Right-click drag translation
+        if (!ui_blocking) {
+            if (activeModelIndex >= 0 && models[activeModelIndex].loaded) {
+                Model3D& model = models[activeModelIndex];
+                if (ctx->mouse_down & MU_MOUSE_RIGHT) {
+                    if (!rightDragging) {
+                        rightDragging = true;
+                        prevRightX = mx;
+                        prevRightY = my;
+                    }
+                    else {
+                        int dx = mx - prevRightX;
+                        int dy = my - prevRightY;
+                        model.localTranslation.x += dx * 1.0f;
+                        model.localTranslation.y -= dy * 1.0f;
+                        prevRightX = mx;
+                        prevRightY = my;
+                    }
+                }
+                else {
+                    rightDragging = false;
+                }
+            }
+        }
+
+        // Left-click line/circle drawing
+        if (!ui_blocking && show_2d_drawings) {
+            if (ctx->mouse_pressed == MU_MOUSE_LEFT) {
+                drawing = true;
+                start_x = mx;
+                start_y = my;
+            }
+        }
+        if (drawing && !(ctx->mouse_down & MU_MOUSE_LEFT)) {
+            drawing = false;
+            if (show_2d_drawings) {
+                if (circle_mode) {
+                    int dx = mx - start_x;
+                    int dy = my - start_y;
+                    int radius = (int)sqrtf(dx * dx + dy * dy);
+                    circles.push_back({ start_x, start_y, radius, current_color });
+                }
+                else {
+                    lines.push_back({ start_x, start_y, mx, my, current_color });
+                }
+            }
+        }
+
+        // Left-click drag rotation (only when 2D drawings are OFF)
+        if (!ui_blocking && !show_2d_drawings) {
+            if (activeModelIndex >= 0 && models[activeModelIndex].loaded) {
+                Model3D& model = models[activeModelIndex];
+                if (ctx->mouse_down & MU_MOUSE_LEFT) {
+                    if (!mouseDragging) {
+                        mouseDragging = true;
+                        prevMouseX = mx;
+                        prevMouseY = my;
+                    }
+                    else {
+                        int dx = mx - prevMouseX;
+                        int dy = my - prevMouseY;
+                        model.localRotation.y += dx * 0.5f;
+                        model.localRotation.x += dy * 0.5f;
+                        prevMouseX = mx;
+                        prevMouseY = my;
+                    }
+                }
+                else {
+                    mouseDragging = false;
+                }
+            }
+        }
+
+        // Background animation
+        static float t = 0.0f;
+        t += 0.016f * speed;
+
+        // 2. Scene Rendering (Background)
+        for (int y = 0; y < HEIGHT; y++) {
+            for (int x = 0; x < WIDTH; x++) {
+                float t0 = t * speed;
+                float r = 0.0f, g = 0.0f, b = 0.0f;
+
+                if (mode == 0) {
+                    float fx = x * 0.005f * wave_strength;
+                    float fy = y * 0.005f * wave_strength;
+                    r = sinf(fx + t0) * 0.5f + 0.5f;
+                    g = sinf(fy + t0 * 1.3f) * 0.5f + 0.5f;
+                    b = sinf(fx + fy + t0 * 0.7f) * 0.5f + 0.5f;
+                }
+                else if (mode == 1) {
+                    float dx = x - WIDTH * 0.5f;
+                    float dy = y - HEIGHT * 0.5f;
+                    float dist = sqrtf(dx * dx + dy * dy);
+                    float wave = sinf(dist * 0.02f * wave_strength - t0 * 3.0f);
+                    r = wave * 0.5f + 0.5f;
+                    g = sinf(wave * 3.0f + t0) * 0.5f + 0.5f;
+                    b = 1.0f - r;
+                }
+                else if (mode == 2) {
+                    float v1 = sinf((x + t0 * 60) * 0.02f * wave_strength);
+                    float v2 = sinf((y - t0 * 40) * 0.02f * wave_strength);
+                    r = v1 * 0.5f + 0.5f;
+                    g = v2 * 0.5f + 0.5f;
+                    b = sinf(v1 + v2 + t0) * 0.5f + 0.5f;
+                }
+
+                r *= intensity;
+                g *= intensity;
+                b *= intensity;
+                if (r > 1.0f) r = 1.0f;
+                if (g > 1.0f) g = 1.0f;
+                if (b > 1.0f) b = 1.0f;
+
+                uint8_t R = (uint8_t)(r * 255);
+                uint8_t G = (uint8_t)(g * 255);
+                uint8_t B = (uint8_t)(b * 255);
+
+                if (invert_colors) {
+                    R = 255 - R;
+                    G = 255 - G;
+                    B = 255 - B;
+                }
+
+                g_buffer[y * WIDTH + x] = MFB_RGB(R, G, B);
+            }
+        }
+
+        // 3. UI Logic
+        static float slider_val = 50.0f;
+        static float number_val = 3.14f;
+        static int checkbox_a = 0;
+        static int checkbox_b = 1;
+        static char textbox_buf[128] = "edit me";
+        static bool quit_requested = false;
+
+        mu_begin(ctx);
+
+        if (mu_begin_window(ctx, "Widgets", mu_rect(20, 20, 360, 540))) {
+            int w1[] = { -1 };
+            static bool show_message = false;
+
+            mu_layout_row(ctx, 1, w1, 0);
+            mu_label(ctx, "mu_label: plain static text");
+            mu_text(ctx, "press 1, 2 or 3 to change mode, + to increase, - to decrease, r to reset");
+
+            mu_checkbox(ctx, "UI Shift (click here)", &enable_distortion);
+            mu_label(ctx, "Circle: Click-drag to set center & radius");
+            mu_checkbox(ctx, "Circle Mode", &circle_mode);
+
+            static float r_val = 255, g_val = 255, b_val = 255;
+            mu_label(ctx, "Line Color R:");
+            mu_slider(ctx, &r_val, 0, 255);
+            mu_label(ctx, "Line Color G:");
+            mu_slider(ctx, &g_val, 0, 255);
+            mu_label(ctx, "Line Color B:");
+            mu_slider(ctx, &b_val, 0, 255);
+            current_color = MFB_RGB((uint8_t)r_val, (uint8_t)g_val, (uint8_t)b_val);
+
+            if (mu_button(ctx, "Clear Lines")) {
+                lines.clear();
+                circles.clear();
+            }
+            if (mu_button(ctx, "mu_button: click me")) {
+                quit_requested = false;
+            }
+            if (mu_button(ctx, "Click me")) {
+                show_message = true;
+            }
+            if (show_message) {
+                mu_layout_row(ctx, 1, w1, 0);
+                mu_label(ctx, "Hello, how is it going?");
+            }
+            mu_checkbox(ctx, "mu_checkbox A (off)", &checkbox_a);
+            mu_checkbox(ctx, "mu_checkbox B (on)", &checkbox_b);
+            mu_label(ctx, "mu_textbox:");
+            mu_textbox(ctx, textbox_buf, sizeof(textbox_buf));
+            mu_label(ctx, "mu_slider (0-100):");
+            mu_slider(ctx, &slider_val, 0, 100);
+            mu_label(ctx, "wave strength:");
+            mu_slider(ctx, &wave_strength, 0, 5);
+            mu_label(ctx, "animation speed:");
+            mu_slider(ctx, &speed, 0.1f, 10);
+            mu_checkbox(ctx, "invert colors", &invert_colors);
+
+            if (mu_button(ctx, "Benchmark Lines")) {
+                srand((unsigned int)time(NULL));
+                const int NUM_LINES = 100000;
+                std::vector<Line> random_lines;
+                random_lines.reserve(NUM_LINES);
+                for (int i = 0; i < NUM_LINES; i++) {
+                    int x0 = rand() % WIDTH;
+                    int y0 = rand() % HEIGHT;
+                    int x1 = rand() % WIDTH;
+                    int y1 = rand() % HEIGHT;
+                    random_lines.push_back({ x0, y0, x1, y1, MFB_RGB(255, 255, 255) });
+                }
+                printf("\n=== Benchmark: %d Lines ===\n", NUM_LINES);
+                auto start = std::chrono::high_resolution_clock::now();
+                for (const auto& l : random_lines) {
+                    renderer.draw_line(l.x0, l.y0, l.x1, l.y1, l.color);
+                }
+                auto end = std::chrono::high_resolution_clock::now();
+                auto bresenham_time = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+                printf("Bresenham (integer): %lld ms\n", bresenham_time);
+                start = std::chrono::high_resolution_clock::now();
+                for (const auto& l : random_lines) {
+                    renderer.draw_line_naive(l.x0, l.y0, l.x1, l.y1, l.color);
+                }
+                end = std::chrono::high_resolution_clock::now();
+                auto naive_time = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+                printf("Naive (floating):   %lld ms\n", naive_time);
+                float speedup = (float)naive_time / (float)bresenham_time;
+                printf("Speedup: %.2fx faster\n\n", speedup);
+            }
+
+            mu_checkbox(ctx, "Anti-alias (smooth lines)", &anti_alias);
+            mu_checkbox(ctx, "Show 2D Drawings", &show_2d_drawings);
+            mu_checkbox(ctx, "Show Axes", &show_axes);
+            mu_checkbox(ctx, "Show Bounding Box", &show_bounding_box);
+            mu_checkbox(ctx, "Draw Normals", &show_normals);
+            mu_checkbox(ctx, "Show BBox Rasterization", &show_bbox_raster);
+            mu_checkbox(ctx, "Show Triangle Fill", &show_triangle_fill);
+            mu_checkbox(ctx, "Show Z-Buffer", &show_z_buffer);
+            mu_checkbox(ctx, "Backface Culling", &show_backface_culling);
+            mu_checkbox(ctx, "Top-Left Fill Rules", &use_fill_rules);
+            mu_checkbox(ctx, "Use Texture", &use_texture);
+            if (mu_button(ctx, "Randomize Colors")) {
+                if (activeModelIndex >= 0 && models[activeModelIndex].loaded) {
+                    Model3D& model = models[activeModelIndex];
+                    for (int i = 0; i < (int)model.faces.size(); i++) {
+                        model.faceColors[i] = randomColor();
+                    }
+                }
+            }
+            mu_label(ctx, "--- Models ---");
+            for (int i = 0; i < (int)models.size(); i++) {
+                char label[64];
+                snprintf(label, sizeof(label), "%s %s", models[i].name.c_str(),
+                    (i == activeModelIndex) ? "✓" : "");
+                if (mu_button(ctx, label)) {
+                    activeModelIndex = i;
+                    printf("Switched to: %s\n", models[i].name.c_str());
+                }
+            }
+            // ---- Lighting Controls (Part 1) ----
+            mu_label(ctx, "--- Lighting ---");
+            mu_label(ctx, "Light Position:");
+            mu_slider(ctx, &g_light.position.x, -500.0f, 500.0f);
+            mu_slider(ctx, &g_light.position.y, -500.0f, 500.0f);
+            mu_slider(ctx, &g_light.position.z, -500.0f, 500.0f);
+
+            mu_label(ctx, "Light Ambient (R,G,B):");
+            mu_slider(ctx, &g_light.ambient.r, 0.0f, 1.0f);
+            mu_slider(ctx, &g_light.ambient.g, 0.0f, 1.0f);
+            mu_slider(ctx, &g_light.ambient.b, 0.0f, 1.0f);
+
+            mu_label(ctx, "Material Ambient (R,G,B):");
+            mu_slider(ctx, &g_material.ambient.r, 0.0f, 1.0f);
+            mu_slider(ctx, &g_material.ambient.g, 0.0f, 1.0f);
+            mu_slider(ctx, &g_material.ambient.b, 0.0f, 1.0f);
+			// Part 2: Diffuse
+            mu_label(ctx, "Light Diffuse (R,G,B):");
+            mu_slider(ctx, &g_light.diffuse.r, 0.0f, 1.0f);
+            mu_slider(ctx, &g_light.diffuse.g, 0.0f, 1.0f);
+            mu_slider(ctx, &g_light.diffuse.b, 0.0f, 1.0f);
+
+            mu_label(ctx, "Material Diffuse (R,G,B):");
+            mu_slider(ctx, &g_material.diffuse.r, 0.0f, 1.0f);
+            mu_slider(ctx, &g_material.diffuse.g, 0.0f, 1.0f);
+            mu_slider(ctx, &g_material.diffuse.b, 0.0f, 1.0f);
+
+            mu_label(ctx, "Light Specular (R,G,B):");
+            mu_slider(ctx, &g_light.specular.r, 0.0f, 1.0f);
+            mu_slider(ctx, &g_light.specular.g, 0.0f, 1.0f);
+            mu_slider(ctx, &g_light.specular.b, 0.0f, 1.0f);
+
+            mu_label(ctx, "Material Specular (R,G,B):");
+            mu_slider(ctx, &g_material.specular.r, 0.0f, 1.0f);
+            mu_slider(ctx, &g_material.specular.g, 0.0f, 1.0f);
+            mu_slider(ctx, &g_material.specular.b, 0.0f, 1.0f);
+
+            mu_label(ctx, "Shininess (0-128):");
+            mu_slider(ctx, &g_material.shininess, 0.0f, 128.0f);
+
+
+            mu_checkbox(ctx, "Show Debug Vectors", &show_debug_vectors);
+            mu_label(ctx, "Shading Mode:");
+            if (mu_button(ctx, "Flat"))   shading_mode = 0;
+            if (mu_button(ctx, "Gouraud")) shading_mode = 1;
+            if (mu_button(ctx, "Phong"))  shading_mode = 2;
+
+            // Show current mode
+            const char* current = (shading_mode == 0) ? "Flat" :
+                (shading_mode == 1) ? "Gouraud" : "Phong";
+            mu_label(ctx, current);
+            mu_label(ctx, "--- 3D Transformations ---");
+            if (activeModelIndex >= 0 && models[activeModelIndex].loaded) {
+                Model3D& model = models[activeModelIndex];
+                mu_label(ctx, "Local Translation:");
+                mu_slider(ctx, &model.localTranslation.x, -500, 500);
+                mu_slider(ctx, &model.localTranslation.y, -500, 500);
+                mu_slider(ctx, &model.localTranslation.z, -500, 500);
+                mu_label(ctx, "Local Rotation (degrees):");
+                mu_slider(ctx, &model.localRotation.x, -180, 180);
+                mu_slider(ctx, &model.localRotation.y, -180, 180);
+                mu_slider(ctx, &model.localRotation.z, -180, 180);
+                mu_label(ctx, "Local Scale:");
+                mu_slider(ctx, &model.localScale.x, 0.1f, 5.0f);
+                mu_slider(ctx, &model.localScale.y, 0.1f, 5.0f);
+                mu_slider(ctx, &model.localScale.z, 0.1f, 5.0f);
+                mu_label(ctx, "World Translation:");
+                mu_slider(ctx, &model.worldTranslation.x, -500, 500);
+                mu_slider(ctx, &model.worldTranslation.y, -500, 500);
+                mu_slider(ctx, &model.worldTranslation.z, -500, 500);
+                mu_label(ctx, "World Rotation (degrees):");
+                mu_slider(ctx, &model.worldRotation.x, -180, 180);
+                mu_slider(ctx, &model.worldRotation.y, -180, 180);
+                mu_slider(ctx, &model.worldRotation.z, -180, 180);
+                mu_label(ctx, "World Scale:");
+                mu_slider(ctx, &model.worldScale.x, 0.1f, 5.0f);
+                mu_slider(ctx, &model.worldScale.y, 0.1f, 5.0f);
+                mu_slider(ctx, &model.worldScale.z, 0.1f, 5.0f);
+                char info[128];
+                snprintf(info, sizeof(info), "Active: %s (%zu vertices, %zu faces)",
+                    model.name.c_str(), model.vertices.size(), model.faces.size());
+                mu_label(ctx, info);
+            }
+            else {
+                mu_label(ctx, "No model loaded!");
+            }
+            mu_label(ctx, "--- Camera Controls ---");
+
+            mu_label(ctx, "Camera Position:");
+            mu_slider(ctx, &camera.position.x, -500, 500);
+            mu_slider(ctx, &camera.position.y, -500, 500);
+            mu_slider(ctx, &camera.position.z, -500, 500);
+
+            mu_label(ctx, "Camera Rotation (degrees):");
+            mu_slider(ctx, &camera.rotation.x, -180, 180);
+            mu_slider(ctx, &camera.rotation.y, -180, 180);
+            mu_slider(ctx, &camera.rotation.z, -180, 180);
+            mu_layout_row(ctx, 1, w1, 0);
+            mu_label(ctx, "mu_number (step 0.1):");
+            mu_number(ctx, &number_val, 0.1f);
+            mu_label(ctx, "--- Projection Controls ---");
+            mu_checkbox(ctx, "Perspective Projection", &projection_mode);
+
+            mu_label(ctx, "Field of View (FOV):");
+            mu_slider(ctx, &fov, 20.0f, 120.0f);
+
+            mu_label(ctx, "Near Plane:");
+            mu_slider(ctx, &nearPlane, 0.01f, 500.0f);
+
+            mu_label(ctx, "Far Plane:");
+            mu_slider(ctx, &farPlane, 1.0f, 5000.0f);
+            mu_label(ctx, "--- Clipping Test ---");
+
+            if (mu_button(ctx, "Test Near Clip")) {
+                nearPlane = 50.0f;
+                camera.position.z = 30.0f;
+                printf("Testing Near Plane: camera at Z=30, near=50\n");
+            }
+
+            if (mu_button(ctx, "Test Far Clip")) {
+                farPlane = 100.0f;
+                camera.position.z = 500.0f;
+                printf("Testing Far Plane: camera at Z=500, far=100\n");
+            }
+
+            if (mu_button(ctx, "Reset View")) {
+                nearPlane = 0.1f;
+                farPlane = 1000.0f;
+                camera.position = glm::vec3(0.0f, 0.0f, 300.0f);
+                printf("Reset view\n");
+            }
+            mu_label(ctx, "--- LookAt Controls ---");
+            mu_checkbox(ctx, "LookAt Mode", &lookat_mode);
+
+            if (lookat_mode) {
+                mu_label(ctx, "LookAt Target:");
+                mu_slider(ctx, &lookatTarget.x, -500, 500);
+                mu_slider(ctx, &lookatTarget.y, -500, 500);
+                mu_slider(ctx, &lookatTarget.z, -500, 500);
+            }
+            mu_label(ctx, "--- Dolly Zoom ---");
+            mu_label(ctx, "Dolly Zoom Effect:");
+            mu_slider(ctx, &dollyZoom, 0.0f, 1.0f);
+            if (mu_header(ctx, "mu_header: collapsible section")) {
+                mu_layout_row(ctx, 1, w1, 0);
+                mu_label(ctx, "Content inside the header.");
+            }
+            if (mu_begin_treenode(ctx, "mu_treenode: root")) {
+                mu_layout_row(ctx, 1, w1, 0);
+                mu_label(ctx, "child item A");
+                if (mu_begin_treenode(ctx, "nested node")) {
+                    mu_layout_row(ctx, 1, w1, 0);
+                    mu_label(ctx, "deeply nested item");
+                    mu_end_treenode(ctx);
+                }
+                mu_end_treenode(ctx);
+            }
+            if (mu_button(ctx, "Quit")) {
+                quit_requested = true;
+            }
+            mu_end_window(ctx);
+        }
+        if (mu_begin_window(ctx, "Panel Demo", mu_rect(395, 20, 380, 200))) {
+            int w2[] = { -1 };
+            mu_layout_row(ctx, 1, w2, 120);
+            mu_begin_panel(ctx, "scrollable panel");
+            int wp[] = { -1 };
+            for (int i = 1; i <= 12; i++) {
+                mu_layout_row(ctx, 1, wp, 0);
+                char line[32];
+                snprintf(line, sizeof(line), "Panel row %d", i);
+                mu_label(ctx, line);
+            }
+            mu_end_panel(ctx);
+            mu_end_window(ctx);
+        }
+
+        if (mu_begin_window(ctx, "Popup Demo", mu_rect(395, 235, 380, 80))) {
+            int w3[] = { -1 };
+            mu_layout_row(ctx, 1, w3, 0);
+            if (mu_button(ctx, "Open popup")) {
+                mu_Container* popup = mu_get_container(ctx, "my popup");
+                popup->rect = mu_rect(ctx->mouse_pos.x, ctx->mouse_pos.y, 260, 84);
+                popup->open = 1;
+                ctx->hover_root = ctx->next_hover_root = popup;
+                mu_bring_to_front(ctx, popup);
+            }
+            int popup_opt = MU_OPT_POPUP | MU_OPT_NORESIZE | MU_OPT_NOSCROLL |
+                MU_OPT_NOTITLE | MU_OPT_CLOSED;
+            if (mu_begin_window_ex(ctx, "my popup", mu_rect(0, 0, 260, 84), popup_opt)) {
+                int wp[] = { -1 };
+                mu_layout_row(ctx, 1, wp, 0);
+                mu_label(ctx, "mu_popup: click outside to close");
+                if (mu_button(ctx, "Close")) {
+                    mu_get_current_container(ctx)->open = 0;
+                }
+                mu_end_window(ctx);
+            }
+            mu_end_window(ctx);
+        }
+
+        mu_end(ctx);
+
+        if (quit_requested) {
+            mfb_close(window);
+            break;
+        }
+        // --- Dolly Zoom ---
+        // Store original values for the effect
+        static float originalCameraZ = 300.0f;
+        static float originalFOV = 60.0f;
+        static bool dollyInitialized = false;
+        if (!dollyInitialized) {
+            originalCameraZ = camera.position.z;
+            originalFOV = fov;
+            dollyInitialized = true;
+        }
+        // Apply dolly zoom
+        if (dollyZoom > 0.0f) {
+            // Move camera backward while zooming in
+            camera.position.z = originalCameraZ + dollyZoom * 400.0f;  // Move back
+            fov = 60.0f - dollyZoom * 30.0f;                    // Zoom in (narrow FOV)
+
+            // Clamp FOV to reasonable range
+            if (fov < 10.0f) fov = 10.0f;
+        }
+        else {
+            // Reset to normal when slider is at 0
+            camera.position.z = originalCameraZ;
+            fov = originalFOV;
+        }
+        // 4. UI Rendering
+        renderer.render(ctx, g_buffer);
+        // --- Build View Matrix  ---
+        glm::mat4 viewMatrix;
+
+        if (lookat_mode) {
+            viewMatrix = glm::lookAt(
+                camera.position,
+                lookatTarget,
+                glm::vec3(0.0f, 1.0f, 0.0f)
+            );
+        }
+        else {
+            viewMatrix = glm::mat4(1.0f);
+            viewMatrix = glm::rotate(viewMatrix, glm::radians(-camera.rotation.x), glm::vec3(1, 0, 0));
+            viewMatrix = glm::rotate(viewMatrix, glm::radians(-camera.rotation.y), glm::vec3(0, 1, 0));
+            viewMatrix = glm::rotate(viewMatrix, glm::radians(-camera.rotation.z), glm::vec3(0, 0, 1));
+            viewMatrix = glm::translate(viewMatrix, -camera.position);
+        }
+        // Draw ALL 3D Wireframes
+        for (int i = 0; i < (int)models.size(); i++) {
+
+            if (models[i].loaded) {
+                Model3D& model = models[i];
+                glm::mat4 modelMatrix = glm::mat4(1.0f);
+                modelMatrix = glm::translate(modelMatrix, model.localTranslation);
+                modelMatrix = glm::rotate(modelMatrix, glm::radians(model.localRotation.x), glm::vec3(1, 0, 0));
+                modelMatrix = glm::rotate(modelMatrix, glm::radians(model.localRotation.y), glm::vec3(0, 1, 0));
+                modelMatrix = glm::rotate(modelMatrix, glm::radians(model.localRotation.z), glm::vec3(0, 0, 1));
+                modelMatrix = glm::scale(modelMatrix, model.localScale);
+
+                glm::mat4 worldMatrix = glm::mat4(1.0f);
+                worldMatrix = glm::translate(worldMatrix, model.worldTranslation);
+                worldMatrix = glm::rotate(worldMatrix, glm::radians(model.worldRotation.x), glm::vec3(1, 0, 0));
+                worldMatrix = glm::rotate(worldMatrix, glm::radians(model.worldRotation.y), glm::vec3(0, 1, 0));
+                worldMatrix = glm::rotate(worldMatrix, glm::radians(model.worldRotation.z), glm::vec3(0, 0, 1));
+                worldMatrix = glm::scale(worldMatrix, model.worldScale);
+
+                // --- Build Projection Matrix ---
+                float aspect = (float)WIDTH / (float)HEIGHT;
+                glm::mat4 projectionMatrix;
+
+                if (projection_mode == 0) {
+                    // Orthographic projection
+                    float orthoSize = 400.0f;
+                    projectionMatrix = glm::ortho(
+                        -orthoSize * aspect, orthoSize * aspect,
+                        -orthoSize, orthoSize,
+                        nearPlane, farPlane
+                    );
+                }
+                else {
+                    // Perspective projection
+                    projectionMatrix = glm::perspective(
+                        glm::radians(fov),
+                        aspect,
+                        nearPlane,
+                        farPlane
+                    );
+                }
+
+                // Combined transform: Projection × View × World × Model
+                glm::mat4 finalTransform = projectionMatrix * viewMatrix * worldMatrix * modelMatrix;
+
+                uint32_t wireColor = (i == activeModelIndex) ? MFB_RGB(0, 0, 0) : MFB_RGB(100, 100, 100);
+                renderer.drawWireframe(model.vertices, model.faces, finalTransform, wireColor);
+
+            }
+        }
+        // --- Debug Visualizations ---
+        if (show_axes) {
+            // World axes at origin (view matrix makes them move with camera)
+            renderer.drawAxes(viewMatrix, 50.0f, MFB_RGB(255, 0, 0), MFB_RGB(0, 255, 0), MFB_RGB(0, 0, 255));
+
+            // Local axes for active model
+            if (activeModelIndex >= 0 && models[activeModelIndex].loaded) {
+                Model3D& model = models[activeModelIndex];
+                glm::mat4 modelMatrix = glm::mat4(1.0f);
+                modelMatrix = glm::translate(modelMatrix, model.localTranslation);
+                modelMatrix = glm::rotate(modelMatrix, glm::radians(model.localRotation.x), glm::vec3(1, 0, 0));
+                modelMatrix = glm::rotate(modelMatrix, glm::radians(model.localRotation.y), glm::vec3(0, 1, 0));
+                modelMatrix = glm::rotate(modelMatrix, glm::radians(model.localRotation.z), glm::vec3(0, 0, 1));
+                modelMatrix = glm::scale(modelMatrix, model.localScale);
+
+                glm::mat4 worldMatrix = glm::mat4(1.0f);
+                worldMatrix = glm::translate(worldMatrix, model.worldTranslation);
+                worldMatrix = glm::rotate(worldMatrix, glm::radians(model.worldRotation.x), glm::vec3(1, 0, 0));
+                worldMatrix = glm::rotate(worldMatrix, glm::radians(model.worldRotation.y), glm::vec3(0, 1, 0));
+                worldMatrix = glm::rotate(worldMatrix, glm::radians(model.worldRotation.z), glm::vec3(0, 0, 1));
+                worldMatrix = glm::scale(worldMatrix, model.worldScale);
+                // --- Build Projection Matrix  ---
+                float aspect = (float)WIDTH / (float)HEIGHT;
+                glm::mat4 projectionMatrix;
+
+                if (projection_mode == 0) {
+                    // Orthographic projection
+                    float orthoSize = 400.0f;
+                    projectionMatrix = glm::ortho(
+                        -orthoSize * aspect, orthoSize * aspect,
+                        -orthoSize, orthoSize,
+                        nearPlane, farPlane
+                    );
+                }
+                else {
+                    // Perspective projection
+                    projectionMatrix = glm::perspective(
+                        glm::radians(fov),
+                        aspect,
+                        nearPlane,
+                        farPlane
+                    );
+                }
+                glm::mat4 finalTransform = projectionMatrix * viewMatrix * worldMatrix * modelMatrix;
+                renderer.drawAxes(finalTransform, 50.0f, MFB_RGB(255, 0, 0), MFB_RGB(0, 255, 0), MFB_RGB(0, 0, 255));
+            }
+        }
+        if (show_bounding_box) {
+            if (activeModelIndex >= 0 && models[activeModelIndex].loaded) {
+                Model3D& model = models[activeModelIndex];
+                glm::mat4 modelMatrix = glm::mat4(1.0f);
+                modelMatrix = glm::translate(modelMatrix, model.localTranslation);
+                modelMatrix = glm::rotate(modelMatrix, glm::radians(model.localRotation.x), glm::vec3(1, 0, 0));
+                modelMatrix = glm::rotate(modelMatrix, glm::radians(model.localRotation.y), glm::vec3(0, 1, 0));
+                modelMatrix = glm::rotate(modelMatrix, glm::radians(model.localRotation.z), glm::vec3(0, 0, 1));
+                modelMatrix = glm::scale(modelMatrix, model.localScale);
+
+                glm::mat4 worldMatrix = glm::mat4(1.0f);
+                worldMatrix = glm::translate(worldMatrix, model.worldTranslation);
+                worldMatrix = glm::rotate(worldMatrix, glm::radians(model.worldRotation.x), glm::vec3(1, 0, 0));
+                worldMatrix = glm::rotate(worldMatrix, glm::radians(model.worldRotation.y), glm::vec3(0, 1, 0));
+                worldMatrix = glm::rotate(worldMatrix, glm::radians(model.worldRotation.z), glm::vec3(0, 0, 1));
+                worldMatrix = glm::scale(worldMatrix, model.worldScale);
+                // --- Build Projection Matrix  ---
+                float aspect = (float)WIDTH / (float)HEIGHT;
+                glm::mat4 projectionMatrix;
+
+                if (projection_mode == 0) {
+                    // Orthographic projection
+                    float orthoSize = 400.0f;
+                    projectionMatrix = glm::ortho(
+                        -orthoSize * aspect, orthoSize * aspect,
+                        -orthoSize, orthoSize,
+                        nearPlane, farPlane
+                    );
+                }
+                else {
+                    // Perspective projection
+                    projectionMatrix = glm::perspective(
+                        glm::radians(fov),
+                        aspect,
+                        nearPlane,
+                        farPlane
+                    );
+                }
+                glm::mat4 finalTransform = projectionMatrix * viewMatrix * worldMatrix * modelMatrix;
+                renderer.drawBoundingBox(model.boundingBoxMin, model.boundingBoxMax, finalTransform, MFB_RGB(255, 255, 0));
+            }
+        }
+
+        if (show_2d_drawings) {
+            for (const auto& l : lines) { // draw stored lines 
+                if (anti_alias) {
+                    renderer.draw_line_wu(l.x0, l.y0, l.x1, l.y1, l.color);
+                }
+                else {
+                    renderer.draw_line(l.x0, l.y0, l.x1, l.y1, l.color);
+                }
+            }
+            if (drawing && !circle_mode) { // preview line while drawing
+                if (anti_alias) {
+                    renderer.draw_line_wu(start_x, start_y, mx, my, current_color);
+                }
+                else {
+                    renderer.draw_line(start_x, start_y, mx, my, current_color);
+                }
+            }
+            if (drawing && circle_mode) { // preview circle while drawing
+                int dx = mx - start_x;
+                int dy = my - start_y;
+                int radius = (int)sqrtf(dx * dx + dy * dy);
+                renderer.draw_circle(start_x, start_y, radius, current_color);
+            }
+            for (const auto& c : circles) {  // draw stored circles
+                renderer.draw_circle(c.xc, c.yc, c.radius, c.color);
+            }
+        }
+        // --- Draw Normals ---
+        if (show_normals) {
+            if (activeModelIndex >= 0 && models[activeModelIndex].loaded) {
+                Model3D& model = models[activeModelIndex];
+
+                // Build transformation matrix (same as wireframe)
+                glm::mat4 modelMatrix = glm::mat4(1.0f);
+                modelMatrix = glm::translate(modelMatrix, model.localTranslation);
+                modelMatrix = glm::rotate(modelMatrix, glm::radians(model.localRotation.x), glm::vec3(1, 0, 0));
+                modelMatrix = glm::rotate(modelMatrix, glm::radians(model.localRotation.y), glm::vec3(0, 1, 0));
+                modelMatrix = glm::rotate(modelMatrix, glm::radians(model.localRotation.z), glm::vec3(0, 0, 1));
+                modelMatrix = glm::scale(modelMatrix, model.localScale);
+
+                glm::mat4 worldMatrix = glm::mat4(1.0f);
+                worldMatrix = glm::translate(worldMatrix, model.worldTranslation);
+                worldMatrix = glm::rotate(worldMatrix, glm::radians(model.worldRotation.x), glm::vec3(1, 0, 0));
+                worldMatrix = glm::rotate(worldMatrix, glm::radians(model.worldRotation.y), glm::vec3(0, 1, 0));
+                worldMatrix = glm::rotate(worldMatrix, glm::radians(model.worldRotation.z), glm::vec3(0, 0, 1));
+                worldMatrix = glm::scale(worldMatrix, model.worldScale);
+
+                float aspect = (float)WIDTH / (float)HEIGHT;
+                glm::mat4 projectionMatrix;
+                if (projection_mode == 0) {
+                    float orthoSize = 400.0f;
+                    projectionMatrix = glm::ortho(-orthoSize * aspect, orthoSize * aspect,
+                        -orthoSize, orthoSize,
+                        nearPlane, farPlane);
+                }
+                else {
+                    projectionMatrix = glm::perspective(glm::radians(fov), aspect,
+                        nearPlane, farPlane);
+                }
+
+                glm::mat4 finalTransform = projectionMatrix * viewMatrix * worldMatrix * modelMatrix;
+
+                // Draw face normals (yellow) and vertex normals (cyan)
+                float normalLength = 30.0f;
+                renderer.drawFaceNormals(model.vertices, model.faces, model.faceNormals,
+                    finalTransform, normalLength, MFB_RGB(255, 255, 0));
+                renderer.drawVertexNormals(model.vertices, model.vertexNormals,
+                    finalTransform, normalLength * 0.6f, MFB_RGB(0, 255, 255));
+            }
+        }
+        // --- 1: BBox Rasterization ---
+        if (show_bbox_raster) {
+            if (activeModelIndex >= 0 && models[activeModelIndex].loaded) {
+                Model3D& model = models[activeModelIndex];
+
+                // Build transformation matrix
+                glm::mat4 modelMatrix = glm::mat4(1.0f);
+                modelMatrix = glm::translate(modelMatrix, model.localTranslation);
+                modelMatrix = glm::rotate(modelMatrix, glm::radians(model.localRotation.x), glm::vec3(1, 0, 0));
+                modelMatrix = glm::rotate(modelMatrix, glm::radians(model.localRotation.y), glm::vec3(0, 1, 0));
+                modelMatrix = glm::rotate(modelMatrix, glm::radians(model.localRotation.z), glm::vec3(0, 0, 1));
+                modelMatrix = glm::scale(modelMatrix, model.localScale);
+
+                glm::mat4 worldMatrix = glm::mat4(1.0f);
+                worldMatrix = glm::translate(worldMatrix, model.worldTranslation);
+                worldMatrix = glm::rotate(worldMatrix, glm::radians(model.worldRotation.x), glm::vec3(1, 0, 0));
+                worldMatrix = glm::rotate(worldMatrix, glm::radians(model.worldRotation.y), glm::vec3(0, 1, 0));
+                worldMatrix = glm::rotate(worldMatrix, glm::radians(model.worldRotation.z), glm::vec3(0, 0, 1));
+                worldMatrix = glm::scale(worldMatrix, model.worldScale);
+
+                float aspect = (float)WIDTH / (float)HEIGHT;
+                glm::mat4 projectionMatrix;
+                if (projection_mode == 0) {
+                    float orthoSize = 400.0f;
+                    projectionMatrix = glm::ortho(-orthoSize * aspect, orthoSize * aspect,
+                        -orthoSize, orthoSize,
+                        nearPlane, farPlane);
+                }
+                else {
+                    projectionMatrix = glm::perspective(glm::radians(fov), aspect,
+                        nearPlane, farPlane);
+                }
+
+                glm::mat4 finalTransform = projectionMatrix * viewMatrix * worldMatrix * modelMatrix;
+
+                // Draw each triangle's bounding box with random color
+                for (int i = 0; i < (int)model.faces.size(); i++) {
+                    std::vector<Face3D> singleFace = { model.faces[i] };
+                    uint32_t color = model.faceColors[i];
+                    renderer.drawTriangleBBox(model.vertices, singleFace, finalTransform, color);
+                }
+            }
+        }
+        // --- Triangle Fill (Barycentric Coordinates) ---
+        if (show_triangle_fill) {
+            if (activeModelIndex >= 0 && models[activeModelIndex].loaded) {
+                Model3D& model = models[activeModelIndex];
+
+                // Build transformation matrices
+                glm::mat4 modelMatrix = glm::mat4(1.0f);
+                modelMatrix = glm::translate(modelMatrix, model.localTranslation);
+                modelMatrix = glm::rotate(modelMatrix, glm::radians(model.localRotation.x), glm::vec3(1, 0, 0));
+                modelMatrix = glm::rotate(modelMatrix, glm::radians(model.localRotation.y), glm::vec3(0, 1, 0));
+                modelMatrix = glm::rotate(modelMatrix, glm::radians(model.localRotation.z), glm::vec3(0, 0, 1));
+                modelMatrix = glm::scale(modelMatrix, model.localScale);
+
+                glm::mat4 worldMatrix = glm::mat4(1.0f);
+                worldMatrix = glm::translate(worldMatrix, model.worldTranslation);
+                worldMatrix = glm::rotate(worldMatrix, glm::radians(model.worldRotation.x), glm::vec3(1, 0, 0));
+                worldMatrix = glm::rotate(worldMatrix, glm::radians(model.worldRotation.y), glm::vec3(0, 1, 0));
+                worldMatrix = glm::rotate(worldMatrix, glm::radians(model.worldRotation.z), glm::vec3(0, 0, 1));
+                worldMatrix = glm::scale(worldMatrix, model.worldScale);
+
+                glm::mat4 modelToWorld = worldMatrix * modelMatrix;
+
+                float aspect = (float)WIDTH / (float)HEIGHT;
+                glm::mat4 projectionMatrix;
+                if (projection_mode == 0) {
+                    float orthoSize = 400.0f;
+                    projectionMatrix = glm::ortho(-orthoSize * aspect, orthoSize * aspect,
+                        -orthoSize, orthoSize,
+                        nearPlane, farPlane);
+                }
+                else {
+                    projectionMatrix = glm::perspective(glm::radians(fov), aspect,
+                        nearPlane, farPlane);
+                }
+
+                // Pre‑compute ambient (constant for all pixels)
+                glm::vec3 ambient = g_light.ambient * g_material.ambient;
+
+                // ----- Loop over faces -----
+                for (int fi = 0; fi < (int)model.faces.size(); fi++) {
+                    const Face3D& face = model.faces[fi];
+
+                    // Object‑space positions and normals
+                    glm::vec3 v0_local = model.vertices[face.v0].position;
+                    glm::vec3 v1_local = model.vertices[face.v1].position;
+                    glm::vec3 v2_local = model.vertices[face.v2].position;
+                    glm::vec2 uv0 = model.vertices[face.v0].uv;
+                    glm::vec2 uv1 = model.vertices[face.v1].uv;
+                    glm::vec2 uv2 = model.vertices[face.v2].uv;
+                    glm::vec3 n0_local = model.vertexNormals[face.v0];
+                    glm::vec3 n1_local = model.vertexNormals[face.v1];
+                    glm::vec3 n2_local = model.vertexNormals[face.v2];
+
+                    // Transform vertices to clip space
+                    glm::vec4 clip0 = projectionMatrix * viewMatrix * modelToWorld * glm::vec4(v0_local, 1.0f);
+                    glm::vec4 clip1 = projectionMatrix * viewMatrix * modelToWorld * glm::vec4(v1_local, 1.0f);
+                    glm::vec4 clip2 = projectionMatrix * viewMatrix * modelToWorld * glm::vec4(v2_local, 1.0f);
+
+                    // Backface culling (optional)
+                    if (show_backface_culling) {
+                        glm::vec3 p0 = glm::vec3(clip0) / clip0.w;
+                        glm::vec3 p1 = glm::vec3(clip1) / clip1.w;
+                        glm::vec3 p2 = glm::vec3(clip2) / clip2.w;
+                        glm::vec3 edge1 = p1 - p0;
+                        glm::vec3 edge2 = p2 - p0;
+                        glm::vec3 normal = glm::normalize(glm::cross(edge1, edge2));
+                        glm::vec3 viewDir = glm::normalize(-p0);
+                        if (glm::dot(normal, viewDir) < 0.0f) continue;
+                    }
+
+                    // Store original Z values (for depth interpolation)
+                    float z0 = clip0.z;
+                    float z1 = clip1.z;
+                    float z2 = clip2.z;
+
+                    // Perspective divide -> screen coordinates
+                    clip0 /= clip0.w;
+                    clip1 /= clip1.w;
+                    clip2 /= clip2.w;
+
+                    float x0 = clip0.x * (WIDTH / 2) + (WIDTH / 2);
+                    float y0 = (HEIGHT / 2) - clip0.y * (HEIGHT / 2);
+                    float x1 = clip1.x * (WIDTH / 2) + (WIDTH / 2);
+                    float y1 = (HEIGHT / 2) - clip1.y * (HEIGHT / 2);
+                    float x2 = clip2.x * (WIDTH / 2) + (WIDTH / 2);
+                    float y2 = (HEIGHT / 2) - clip2.y * (HEIGHT / 2);
+
+                    // Bounding box (with clamping)
+                    int minX = (int)std::floor(std::min({ x0, x1, x2 }));
+                    int maxX = (int)std::ceil(std::max({ x0, x1, x2 }));
+                    int minY = (int)std::floor(std::min({ y0, y1, y2 }));
+                    int maxY = (int)std::ceil(std::max({ y0, y1, y2 }));
+
+                    minX = std::max(minX, 0);
+                    maxX = std::min(maxX, WIDTH - 1);
+                    minY = std::max(minY, 0);
+                    maxY = std::min(maxY, HEIGHT - 1);
+
+                    glm::vec2 sv0(x0, y0);
+                    glm::vec2 sv1(x1, y1);
+                    glm::vec2 sv2(x2, y2);
+                    // ---- Compute normal matrix once per face (for Phong) ----
+                    glm::mat3 normalMat = glm::transpose(glm::inverse(glm::mat3(modelToWorld)));
+
+                    // ---- Helper to compute world‑space position and normal  ----
+                    auto computeWorldPosNormal = [&](float alpha, float beta, float gamma) -> std::pair<glm::vec3, glm::vec3> {
+                        glm::vec3 pos_local = alpha * v0_local + beta * v1_local + gamma * v2_local;
+                        glm::vec3 normal_local = alpha * n0_local + beta * n1_local + gamma * n2_local;
+                        normal_local = glm::normalize(normal_local);
+
+                        // modelToWorld has no perspective, so w is always 1 – we can skip the division
+                        glm::vec3 pos_world = glm::vec3(modelToWorld * glm::vec4(pos_local, 1.0f));
+                        glm::vec3 normal_world = glm::normalize(normalMat * normal_local);
+                        return { pos_world, normal_world };
+                        };
+
+                    // ---- Pre‑compute vertex colors for Gouraud ----
+                    glm::vec3 color0(0), color1(0), color2(0);
+                    if (shading_mode == 1) {
+                        // Transform vertices to world space for lighting
+                        glm::vec4 pos0_w = modelToWorld * glm::vec4(v0_local, 1.0f);
+                        glm::vec4 pos1_w = modelToWorld * glm::vec4(v1_local, 1.0f);
+                        glm::vec4 pos2_w = modelToWorld * glm::vec4(v2_local, 1.0f);
+                        glm::vec3 p0 = glm::vec3(pos0_w) / pos0_w.w;
+                        glm::vec3 p1 = glm::vec3(pos1_w) / pos1_w.w;
+                        glm::vec3 p2 = glm::vec3(pos2_w) / pos2_w.w;
+                        glm::mat3 normalMat = glm::transpose(glm::inverse(glm::mat3(modelToWorld)));
+                        glm::vec3 n0 = glm::normalize(normalMat * n0_local);
+                        glm::vec3 n1 = glm::normalize(normalMat * n1_local);
+                        glm::vec3 n2 = glm::normalize(normalMat * n2_local);
+
+                        auto calcLight = [&](const glm::vec3& pos, const glm::vec3& normal, const glm::vec2& uv) -> glm::vec3 {
+                            // ---- Diffuse ----
+                            glm::vec3 diffColor = g_material.diffuse;
+                            if (use_texture && g_textureData) {
+                                int u = (int)(uv.x * g_texWidth) % g_texWidth;
+                                int v = (int)(uv.y * g_texHeight) % g_texHeight;
+                                if (u < 0) u = 0;
+                                if (v < 0) v = 0;
+                                uint32_t col = g_textureData[v * g_texWidth + u];
+                                diffColor = glm::vec3((col >> 16) & 0xFF, (col >> 8) & 0xFF, col & 0xFF) / 255.0f;
+                            }
+                            glm::vec3 lightDir = glm::normalize(g_light.position - pos);
+                            float diff = glm::max(glm::dot(normal, lightDir), 0.0f);
+                            glm::vec3 diffuse = g_light.diffuse * diffColor * diff;
+
+                            // ---- Specular ----
+                            glm::vec3 viewDir = glm::normalize(camera.position - pos);
+                            glm::vec3 reflectDir = glm::reflect(-lightDir, normal);
+                            float spec = glm::pow(glm::max(glm::dot(reflectDir, viewDir), 0.0f), g_material.shininess);
+                            glm::vec3 specular = g_light.specular * g_material.specular * spec;
+
+                            return ambient + diffuse + specular;
+                            };
+                        color0 = glm::clamp(calcLight(p0, n0, uv0), 0.0f, 1.0f);
+                        color1 = glm::clamp(calcLight(p1, n1, uv1), 0.0f, 1.0f);
+                        color2 = glm::clamp(calcLight(p2, n2, uv2), 0.0f, 1.0f);
+                    }
+                    // ---- Compute flat color once per face  ----
+                    glm::vec3 flatColor(0.0f);
+                    if (shading_mode == 0) {
+                        // Centroid
+                        glm::vec3 centroid_local = (v0_local + v1_local + v2_local) / 3.0f;
+                        glm::vec4 cent_w = modelToWorld * glm::vec4(centroid_local, 1.0f);
+                        glm::vec3 centroid_world = glm::vec3(cent_w) / cent_w.w;
+
+                        // Face normal
+                        glm::vec3 normal_local = model.faceNormals[fi];
+                        glm::mat3 normalMat = glm::transpose(glm::inverse(glm::mat3(modelToWorld)));
+                        glm::vec3 normal_world = glm::normalize(normalMat * normal_local);
+
+                        //Texture sampling at centroid
+                        glm::vec3 diffColor = g_material.diffuse; // fallback
+                        if (use_texture && g_textureData) {
+                            // Interpolate UV at centroid
+                            glm::vec2 uv_centroid = (uv0 + uv1 + uv2) / 3.0f;
+                            int u = (int)(uv_centroid.x * g_texWidth) % g_texWidth;
+                            int v = (int)(uv_centroid.y * g_texHeight) % g_texHeight;
+                            if (u < 0) u = 0;
+                            if (v < 0) v = 0;
+                            uint32_t col = g_textureData[v * g_texWidth + u];
+                            diffColor = glm::vec3((col >> 16) & 0xFF, (col >> 8) & 0xFF, col & 0xFF) / 255.0f;
+                        }
+                        glm::vec3 lightDir = glm::normalize(g_light.position - centroid_world);
+                        float diff = glm::max(glm::dot(normal_world, lightDir), 0.0f);
+                        glm::vec3 diffuse = g_light.diffuse * diffColor * diff;
+
+                        // Specular
+                        glm::vec3 viewDir = glm::normalize(camera.position - centroid_world);
+                        glm::vec3 reflectDir = glm::reflect(-lightDir, normal_world);
+                        float spec = glm::pow(glm::max(glm::dot(reflectDir, viewDir), 0.0f), g_material.shininess);
+                        glm::vec3 specular = g_light.specular * g_material.specular * spec;
+
+                        // Final
+                        flatColor = glm::clamp(ambient + diffuse + specular, 0.0f, 1.0f);
+                    }
+                    // ---- Pixel loop ----
+                    for (int y = minY; y <= maxY; y++) {
+                        for (int x = minX; x <= maxX; x++) {
+                            glm::vec3 bary = computeBarycentric((float)x, (float)y, sv0, sv1, sv2);
+                            const float eps = 0.001f;
+                            if (bary.x >= -eps && bary.y >= -eps && bary.z >= -eps) {
+                                // Top‑left fill rule (optional)
+                                if (use_fill_rules) {
+                                    // Simple check: if pixel is on an edge and not top/left, skip
+                                    // (We'll skip for brevity; you can copy the logic from your previous code)
+                                }
+
+                                // Interpolate depth
+                                float depth = bary.x * z0 + bary.y * z1 + bary.z * z2;
+                                int idx = y * WIDTH + x;
+                                if (depth < z_buffer[idx]) {
+                                    z_buffer[idx] = depth;
+
+                                    glm::vec3 finalColor(0.0f);
+
+                                    if (shading_mode == 0) {
+                                        finalColor = flatColor;   // Use the pre‑computed colour
+                                    }
+                                    else if (shading_mode == 1) { // Gouraud
+                                        glm::vec3 interpColor = bary.x * color0 + bary.y * color1 + bary.z * color2;
+                                        finalColor = interpColor;
+                                    }
+                                    else if (shading_mode == 2) { // Phong
+                                        auto [pos_world, normal_world] = computeWorldPosNormal(bary.x, bary.y, bary.z);
+
+                                        // ---- Diffuse ----
+                                        glm::vec3 diffColor = g_material.diffuse;
+                                        if (use_texture && g_textureData) {
+                                            glm::vec2 uv = bary.x * uv0 + bary.y * uv1 + bary.z * uv2;
+                                            int u = (int)(uv.x * g_texWidth) % g_texWidth;
+                                            int v = (int)(uv.y * g_texHeight) % g_texHeight;
+                                            if (u < 0) u = 0;
+                                            if (v < 0) v = 0;
+                                            uint32_t col = g_textureData[v * g_texWidth + u];
+                                            diffColor = glm::vec3((col >> 16) & 0xFF, (col >> 8) & 0xFF, col & 0xFF) / 255.0f;
+                                        }
+                                        glm::vec3 lightDir = glm::normalize(g_light.position - pos_world);
+                                        float diff = glm::max(glm::dot(normal_world, lightDir), 0.0f);
+                                        glm::vec3 diffuse = g_light.diffuse * diffColor * diff;
+
+                                        // ---- Specular ----
+                                        glm::vec3 viewDir = glm::normalize(camera.position - pos_world);
+                                        glm::vec3 reflectDir = glm::reflect(-lightDir, normal_world);
+                                        float spec = glm::pow(glm::max(glm::dot(reflectDir, viewDir), 0.0f), g_material.shininess);
+                                        glm::vec3 specular = g_light.specular * g_material.specular * spec;
+
+                                        finalColor = glm::clamp(ambient + diffuse + specular, 0.0f, 1.0f);
+                                    }
+
+                                    uint8_t r = (uint8_t)(finalColor.r * 255);
+                                    uint8_t g = (uint8_t)(finalColor.g * 255);
+                                    uint8_t b = (uint8_t)(finalColor.b * 255);
+                                    g_buffer[idx] = MFB_RGB(r, g, b);
+                                }
+                            }
+                        }
+                    }
+
+                    // ---- Debug vectors (draw after all pixels of this face) ----
+                    if (show_debug_vectors && fi < 3) {
+                        // Compute centroid world (same as for flat)
+                        glm::vec3 centroid_local = (v0_local + v1_local + v2_local) / 3.0f;
+                        glm::vec4 cent_w = modelToWorld * glm::vec4(centroid_local, 1.0f);
+                        glm::vec3 centroid_world = glm::vec3(cent_w) / cent_w.w;
+                        glm::vec3 normal_local = model.faceNormals[fi];
+                        glm::vec3 normal_world = glm::normalize(normalMat * normal_local);
+                        glm::vec3 lightDir = glm::normalize(g_light.position - centroid_world);
+                        glm::vec3 reflectDir = glm::reflect(-lightDir, normal_world);
+
+                        float len = 50.0f;
+                        glm::vec3 lightEnd = centroid_world + lightDir * len;
+                        glm::vec3 reflectEnd = centroid_world + reflectDir * len;
+
+                        auto worldToScreen = [&](const glm::vec3& worldPos) -> glm::vec2 {
+                            glm::vec4 clip = projectionMatrix * viewMatrix * glm::vec4(worldPos, 1.0f);
+                            clip = clip / clip.w;
+                            float sx = (clip.x * 0.5f + 0.5f) * WIDTH;
+                            float sy = (1.0f - (clip.y * 0.5f + 0.5f)) * HEIGHT;
+                            return glm::vec2(sx, sy);
+                            };
+
+                        glm::vec2 c = worldToScreen(centroid_world);
+                        glm::vec2 l = worldToScreen(lightEnd);
+                        glm::vec2 r = worldToScreen(reflectEnd);
+
+                        debugLines.push_back({ (int)c.x, (int)c.y, (int)l.x, (int)l.y, MFB_RGB(255, 255, 0) });
+                        debugLines.push_back({ (int)c.x, (int)c.y, (int)r.x, (int)r.y, MFB_RGB(0, 255, 255) });
+                    }
+                }
+
+                // ---- Draw all debug lines after all faces ----
+                if (show_debug_vectors) {
+                    for (const auto& line : debugLines) {
+                        renderer.draw_line(line.x0, line.y0, line.x1, line.y1, line.color);
+                    }
+                }
+                debugLines.clear();
+            }
+        }
+        // --- 3: Z-Buffer Visualization ---
+        if (show_z_buffer) {
+            // Find min and max depth values in the Z-buffer
+            float minDepth = farPlane;
+            float maxDepth = -farPlane;
+            for (int i = 0; i < WIDTH * HEIGHT; i++) {
+                if (z_buffer[i] < farPlane) {
+                    minDepth = std::min(minDepth, z_buffer[i]);
+                    maxDepth = std::max(maxDepth, z_buffer[i]);
+                }
+            }
+            if (minDepth >= maxDepth) {
+                minDepth = 0.0f;
+                maxDepth = 1.0f;
+            }
+            renderer.drawZBuffer(z_buffer, minDepth, maxDepth);
+
+        }
+        renderer.render(ctx, g_buffer);
+        // 5. Display (Always update)
+        mfb_update_state state = mfb_update_ex(window, g_buffer, WIDTH, HEIGHT);
+        if (state < 0)
+            break;
+
+        mfb_wait_sync(window);
+    }
+
+    mfb_close(window);
+    free(ctx);
+    return 0;
+}

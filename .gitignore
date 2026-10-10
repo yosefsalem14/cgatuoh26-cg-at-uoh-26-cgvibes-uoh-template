@@ -16,6 +16,4 @@ build/
 out/
 .gradle/
 _deps/
-glm-master/
-minifb-master/
 .vscode/

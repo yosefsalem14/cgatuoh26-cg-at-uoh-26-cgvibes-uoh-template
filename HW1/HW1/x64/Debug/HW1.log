@@ -1,1 +1,7 @@
-﻿  HW1.vcxproj -> C:\courses\ComputerGraphics\cgatuoh26-cg-at-uoh-26-cgvibes-uoh-template\HW1\x64\Debug\HW1.exe
+﻿  main.cpp
+C:\courses\ComputerGraphics\cgatuoh26-cg-at-uoh-26-cgvibes-uoh-template\HW1\main.cpp(1,10): error C1083: Cannot open include file: 'glm/glm.hpp': No such file or directory
+  ui_renderer.cpp
+C:\courses\ComputerGraphics\cgatuoh26-cg-at-uoh-26-cgvibes-uoh-template\HW1\ui_renderer.h(7,10): error C1083: Cannot open include file: 'glm/glm.hpp': No such file or directory
+  (compiling source file 'ui_renderer.cpp')
+  
+  Generating Code...
