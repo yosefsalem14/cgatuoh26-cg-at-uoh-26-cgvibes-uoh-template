@@ -1,0 +1,4 @@
+=== Benchmark: 100000 Lines ===
+Bresenham (integer): 424 ms
+Naive (floating):   358 ms
+Speedup: 0.84x faster

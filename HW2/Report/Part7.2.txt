@@ -1,0 +1,7 @@
+We implemented three mouse-based interaction methods for intuitive 3D manipulation:
+
+1. Left Mouse Button + Drag – When the 'Show 2D Drawings' toggle is OFF, dragging with the left mouse button rotates the active model around its local X and Y axes. The rotation speed is proportional to the mouse movement delta.
+
+2. Right Mouse Button + Drag – Dragging with the right mouse button translates the active model in the XY plane, providing precise positioning control.
+
+3. Middle Mouse Button + Drag – Dragging with the middle mouse button scales the active model up or down, with the scale factor determined by the vertical movement of the mouse.

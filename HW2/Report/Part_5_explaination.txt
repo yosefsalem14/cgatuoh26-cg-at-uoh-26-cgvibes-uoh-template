@@ -1,0 +1,11 @@
+The difference between Local and World transformations is clearly demonstrated in the screenshots Part_5_local.png and Part_5_world.png:
+The Local transformation rotates the model around its own center, while the World transformation rotates the model around the world origin (0,0,0).
+Local Rotation shows the cube rotated around its own center. The cube spins in place while remaining at the same position (translation = 0). This is achieved by applying the rotation matrix before the translation matrix.
+World Rotation shows the cube rotated around the world origin. The cube orbits around the screen center, changing its position in space. This is achieved by applying the rotation matrix after the translation matrix.
+The key difference is the order of matrix multiplication:
+
+Local: Translate × Rotate × Scale
+
+World: Rotate × Translate × Scale
+
+In Local transformation, the rotation is applied in the model's local coordinate system. In World transformation, the rotation is applied in the world coordinate system, causing the object to orbit around the origin.

@@ -1,0 +1,9 @@
+We implemented keyboard controls for interactive 3D manipulation using the following key mappings:
+
+- Translation: W (up), S (down), A (left), D (right), Q (forward), E (backward)
+- Rotation: Z (X+), X (X-), C (Y+), V (Y-), B (Z+), N (Z-)
+- Reset: R (resets all transformations to default)
+
+Each key press increments or decrements the corresponding transformation value by 5 units (translation) or 5 degrees (rotation). This provides real-time interactive control over the 3D model, complementing the GUI sliders.
+
+The keyboard input is handled through the mfb_set_char_input_callback function, which intercepts key presses before they reach the UI, allowing for responsive interaction.

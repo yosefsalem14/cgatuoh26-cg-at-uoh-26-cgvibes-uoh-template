@@ -1,0 +1,3 @@
+The normalization algorithm centers the model at the world origin (0,0,0) by subtracting the model's center from all vertices.
+It then applies a uniform scale factor to ensure the model fits comfortably within the viewport.
+This guarantees that the model is visible and centered when no user transformations are applied.

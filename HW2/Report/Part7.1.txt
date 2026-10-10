@@ -1,0 +1,2 @@
+Multiple models are stored in the models vector, each with independent transformations. All models are rendered simultaneously, with the active model highlighted in black and inactive models in gray.
+Transformations (sliders, keyboard, mouse) affect only the active model, allowing independent manipulation of each object in the scene.
