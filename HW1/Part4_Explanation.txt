@@ -1,0 +1,16 @@
+PART 4: UI Visual Translation
+
+I applied a fixed translation of (+50, +30) pixels to all UI elements
+by modifying draw_rect and draw_text. The shift is controlled by the
+"UI Shift (click here)" checkbox inside the Widgets window.
+
+WHY CLICKING FAILS:
+MicroUI's click detection uses the original coordinates during the UI
+logic phase (mu_begin/mu_end), BEFORE rendering. The renderer draws
+pixels at (x+50, y+30), but MicroUI checks clicks at (x, y).
+
+WHERE TO CLICK:
+To toggle the checkbox, the user must click 50px LEFT and 30px UP
+from where the checkbox visually appears (the original logical position).
+
+When shift is OFF, everything works normally.

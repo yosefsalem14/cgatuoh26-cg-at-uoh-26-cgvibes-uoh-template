@@ -1,0 +1,14 @@
+{
+    "version": 1,
+    "revision": 0,
+    "rules": [
+        {
+            "primary-output": "HW1\\x64\\Debug\\ui_bridge.obj",
+            "outputs": [
+                "HW1\\x64\\Debug\\ui_bridge.h.obj.dt.module.json",
+                "HW1\\x64\\Debug\\ui_bridge.h.obj.dt.d.json"
+            ],
+            "requires": []
+        }
+    ]
+}
