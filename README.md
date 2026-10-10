@@ -3,6 +3,8 @@
 **Student Information**
 * **Name:** Yosef Salem
 * **Student ID:** 213537459
+* **Name:** raghdan saaida 
+* **Student ID:** 324098169
 
 ## Academic Integrity & Workflow Agreement
 
